@@ -1,0 +1,14 @@
+{
+  "domain": "welkom",
+  "name": "Welkom",
+  "codeowners": [
+    "@DouweM"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/DouweM/ha-welkom",
+  "issue_tracker": "https://github.com/DouweM/ha-welkom/issues",
+  "iot_class": "local_polling",
+  "quality_scale": "bronze",
+  "requirements": [],
+  "version": "0.0.1"
+}
