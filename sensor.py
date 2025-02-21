@@ -100,7 +100,7 @@ async def async_setup_entry(
                 sensor_id="unknown_people_count",
                 device_name=home.display_name,
                 name="Unknown people count",
-                icon="mdi:account-off",
+                icon="mdi:account-question",
                 state_class=SensorStateClass.MEASUREMENT,
                 suggested_display_precision=0,
                 value_fn=lambda data, key: home_data.unknown_people_count
@@ -117,7 +117,7 @@ async def async_setup_entry(
                 sensor_id="unknown_people",
                 device_name=home.display_name,
                 name="Unknown people",
-                icon="mdi:account-off",
+                icon="mdi:account-question",
                 value_fn=lambda data, key: ", ".join(home_data.unknown_people)
                 if (home_data := data.homes.get(key))
                 else "",
@@ -195,7 +195,7 @@ async def async_setup_entry(
                 sensor_id="unknown_people_count",
                 device_name=room.display_name,
                 name="Unknown people count",
-                icon="mdi:account-off",
+                icon="mdi:account-question",
                 state_class=SensorStateClass.MEASUREMENT,
                 suggested_display_precision=0,
                 value_fn=lambda data, key: room_data.unknown_people_count
@@ -212,7 +212,7 @@ async def async_setup_entry(
                 sensor_id="unknown_people",
                 device_name=room.display_name,
                 name="Unknown people",
-                icon="mdi:account-off",
+                icon="mdi:account-question",
                 value_fn=lambda data, key: ", ".join(room_data.unknown_people)
                 if (room_data := data.rooms.get(key))
                 else "",

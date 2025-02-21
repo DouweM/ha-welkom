@@ -87,7 +87,10 @@ class Person(BaseModel):
     @computed_field
     @property
     def icon(self) -> str:
-        return "mdi:" + (self.attrs.mdi_icon or "account")
+        if self.known:
+            return "mdi:" + (self.attrs.mdi_icon or "account")
+        else:
+            return "mdi:account-question"
 
     @computed_field
     @property
