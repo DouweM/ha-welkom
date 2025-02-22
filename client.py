@@ -17,8 +17,6 @@ class WelkomClient(BaseModel):
 
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
-    _home: Home | None = None
-    _rooms: dict[str, Room] | None = None
     _people: dict[str, Person] | None = None
     # _devices: dict[str, Device] | None = None
 
@@ -65,39 +63,6 @@ class WelkomClient(BaseModel):
     #         # TODO: What ID to use?
     #         self._devices = {device.id: device for device in devices}
     #     return self._devices
-
-    @property
-    async def home(self) -> Home:
-        if self._home is None:
-            homes = await self.homes
-
-            home = None
-            if self.home_id:
-                if self.home_id not in homes:
-                    raise ValueError(
-                        f"Home '{self.home_id}' not found. Available homes: {', '.join(homes.keys())}"
-                    )
-
-                home = homes[self.home_id]
-            elif len(homes) == 1:
-                home = next(iter(homes.values()))
-            else:
-                raise ValueError(
-                    "You have multiple homes, please specify the 'home_id' in the configuration. "
-                    f"Available homes: {', '.join(homes.keys())}"
-                )
-
-            self._home = home
-
-        return self._home
-
-    @property
-    async def rooms(self) -> dict[str, Room]:
-        if self._rooms is None:
-            home = await self.home
-            self._rooms = {room.id: room for room in home.rooms} if home else {}
-
-        return self._rooms
 
     @property
     async def connected_people(self) -> list[ConnectedPerson]:

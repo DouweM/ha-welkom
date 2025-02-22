@@ -1,6 +1,8 @@
 """Device tracker platform for Welkom."""
 
 from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
@@ -8,11 +10,23 @@ from homeassistant.components.sensor.const import SensorStateClass
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import WelkomClient
 from .const import DOMAIN
-from .coordinator import WelkomConfigEntry, WelkomCoordinator, WelkomData
+from .coordinator import (
+    HomeData,
+    RoomData,
+    WelkomConfigEntry,
+    WelkomCoordinator,
+    WelkomData,
+)
+
+NUMBER_PARAMS = {
+    "state_class": SensorStateClass.MEASUREMENT,
+    "suggested_display_precision": 0,
+}
 
 
 async def async_setup_entry(
@@ -24,202 +38,145 @@ async def async_setup_entry(
 
     coordinator = config_entry.runtime_data
     client = coordinator.client
+    homes = coordinator.homes or {}
+    rooms = coordinator.rooms or {}
 
-    homes = await client.homes
-    rooms = await client.rooms
+    entity_descriptions: list[WelkomAreaSensorDescription] = []
+    for home in homes.values():
+        device_params: dict[str, Any] = {
+            "client": client,
+            "device_id": home.unique_id,
+            "device_name": home.display_name,
+            "context": home.id,
+        }
+        entity_descriptions.extend(
+            [
+                WelkomAreaSensorDescription(
+                    icon=home.icon,
+                    key="people_count",
+                    **NUMBER_PARAMS,
+                    value_fn=lambda data, key: data.homes.get(
+                        key, HomeData()
+                    ).people_count,
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="people",
+                    name="People",
+                    icon="mdi:home-account",
+                    value_fn=lambda data, key: ", ".join(
+                        data.homes.get(key, HomeData()).people
+                    ),
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="known_people_count",
+                    name="Known people count",
+                    icon="mdi:account-check",
+                    **NUMBER_PARAMS,
+                    value_fn=lambda data, key: data.homes.get(
+                        key, HomeData()
+                    ).known_people_count,
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    **device_params,
+                    key="known_people",
+                    name="Known people",
+                    icon="mdi:account-check",
+                    value_fn=lambda data, key: ", ".join(
+                        data.homes.get(key, HomeData()).known_people
+                    ),
+                ),
+                WelkomAreaSensorDescription(
+                    key="unknown_people_count",
+                    name="Unknown people count",
+                    icon="mdi:account-question",
+                    **NUMBER_PARAMS,
+                    value_fn=lambda data, key: data.homes.get(
+                        key, HomeData()
+                    ).unknown_people_count,
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="unknown_people",
+                    name="Unknown people",
+                    icon="mdi:account-question",
+                    value_fn=lambda data, key: ", ".join(
+                        data.homes.get(key, HomeData()).unknown_people
+                    ),
+                    **device_params,
+                ),
+            ]
+        )
 
-    entity_descriptions = [
-        *(
-            WelkomAreaSensorDescription(
-                key=home_id,
-                client=client,
-                device_id=home.unique_id,
-                sensor_id="people_count",
-                device_name=home.display_name,
-                icon=home.icon,
-                state_class=SensorStateClass.MEASUREMENT,
-                suggested_display_precision=0,
-                value_fn=lambda data, key: home_data.people_count
-                if (home_data := data.homes.get(key))
-                else 0,
-            )
-            for home_id, home in homes.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=home_id,
-                client=client,
-                device_id=home.unique_id,
-                sensor_id="people",
-                device_name=home.display_name,
-                name="People",
-                icon="mdi:home-account",
-                value_fn=lambda data, key: ", ".join(home_data.people)
-                if (home_data := data.homes.get(key))
-                else "",
-            )
-            for home_id, home in homes.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=home_id,
-                client=client,
-                device_id=home.unique_id,
-                sensor_id="known_people_count",
-                device_name=home.display_name,
-                name="Known people count",
-                icon="mdi:account-check",
-                state_class=SensorStateClass.MEASUREMENT,
-                suggested_display_precision=0,
-                value_fn=lambda data, key: home_data.known_people_count
-                if (home_data := data.homes.get(key))
-                else 0,
-            )
-            for home_id, home in homes.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=home_id,
-                client=client,
-                device_id=home.unique_id,
-                sensor_id="known_people",
-                device_name=home.display_name,
-                name="Known people",
-                icon="mdi:account-check",
-                value_fn=lambda data, key: ", ".join(home_data.known_people)
-                if (home_data := data.homes.get(key))
-                else "",
-            )
-            for home_id, home in homes.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=home_id,
-                client=client,
-                device_id=home.unique_id,
-                sensor_id="unknown_people_count",
-                device_name=home.display_name,
-                name="Unknown people count",
-                icon="mdi:account-question",
-                state_class=SensorStateClass.MEASUREMENT,
-                suggested_display_precision=0,
-                value_fn=lambda data, key: home_data.unknown_people_count
-                if (home_data := data.homes.get(key))
-                else 0,
-            )
-            for home_id, home in homes.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=home_id,
-                client=client,
-                device_id=home.unique_id,
-                sensor_id="unknown_people",
-                device_name=home.display_name,
-                name="Unknown people",
-                icon="mdi:account-question",
-                value_fn=lambda data, key: ", ".join(home_data.unknown_people)
-                if (home_data := data.homes.get(key))
-                else "",
-            )
-            for home_id, home in homes.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=room_id,
-                client=client,
-                device_id=room.unique_id,
-                sensor_id="people_count",
-                device_name=room.display_name,
-                icon=room.icon,
-                state_class=SensorStateClass.MEASUREMENT,
-                suggested_display_precision=0,
-                value_fn=lambda data, key: room_data.people_count
-                if (room_data := data.rooms.get(key))
-                else 0,
-            )
-            for room_id, room in rooms.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=room_id,
-                client=client,
-                device_id=room.unique_id,
-                sensor_id="people",
-                device_name=room.display_name,
-                name="People",
-                icon="mdi:home-account",
-                value_fn=lambda data, key: ", ".join(room_data.people)
-                if (room_data := data.rooms.get(key))
-                else "",
-            )
-            for room_id, room in rooms.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=room_id,
-                client=client,
-                device_id=room.unique_id,
-                sensor_id="known_people_count",
-                device_name=room.display_name,
-                name="Known people count",
-                icon="mdi:account-check",
-                state_class=SensorStateClass.MEASUREMENT,
-                suggested_display_precision=0,
-                value_fn=lambda data, key: room_data.known_people_count
-                if (room_data := data.rooms.get(key))
-                else 0,
-            )
-            for room_id, room in rooms.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=room_id,
-                client=client,
-                device_id=room.unique_id,
-                sensor_id="known_people",
-                device_name=room.display_name,
-                name="Known people",
-                icon="mdi:account-check",
-                value_fn=lambda data, key: ", ".join(room_data.known_people)
-                if (room_data := data.rooms.get(key))
-                else "",
-            )
-            for room_id, room in rooms.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=room_id,
-                client=client,
-                device_id=room.unique_id,
-                sensor_id="unknown_people_count",
-                device_name=room.display_name,
-                name="Unknown people count",
-                icon="mdi:account-question",
-                state_class=SensorStateClass.MEASUREMENT,
-                suggested_display_precision=0,
-                value_fn=lambda data, key: room_data.unknown_people_count
-                if (room_data := data.rooms.get(key))
-                else 0,
-            )
-            for room_id, room in rooms.items()
-        ),
-        *(
-            WelkomAreaSensorDescription(
-                key=room_id,
-                client=client,
-                device_id=room.unique_id,
-                sensor_id="unknown_people",
-                device_name=room.display_name,
-                name="Unknown people",
-                icon="mdi:account-question",
-                value_fn=lambda data, key: ", ".join(room_data.unknown_people)
-                if (room_data := data.rooms.get(key))
-                else "",
-            )
-            for room_id, room in rooms.items()
-        ),
-    ]
+    for room in rooms.values():
+        device_params: dict[str, Any] = {
+            "client": client,
+            "device_id": room.unique_id,
+            "device_name": room.display_name,
+            "context": room.id,
+        }
+        entity_descriptions.extend(
+            [
+                WelkomAreaSensorDescription(
+                    key="people_count",
+                    icon=room.icon,
+                    **NUMBER_PARAMS,
+                    value_fn=lambda data, key: data.rooms.get(
+                        key, RoomData()
+                    ).people_count,
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="people",
+                    name="People",
+                    icon="mdi:home-account",
+                    value_fn=lambda data, key: ", ".join(
+                        data.rooms.get(key, RoomData()).people
+                    ),
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="known_people_count",
+                    name="Known people count",
+                    icon="mdi:account-check",
+                    **NUMBER_PARAMS,
+                    value_fn=lambda data, key: data.rooms.get(
+                        key, RoomData()
+                    ).known_people_count,
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="known_people",
+                    name="Known people",
+                    icon="mdi:account-check",
+                    value_fn=lambda data, key: ", ".join(
+                        data.rooms.get(key, RoomData()).known_people
+                    ),
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="unknown_people_count",
+                    name="Unknown people count",
+                    icon="mdi:account-question",
+                    **NUMBER_PARAMS,
+                    value_fn=lambda data, key: data.rooms.get(
+                        key, RoomData()
+                    ).unknown_people_count,
+                    **device_params,
+                ),
+                WelkomAreaSensorDescription(
+                    key="unknown_people",
+                    name="Unknown people",
+                    icon="mdi:account-question",
+                    value_fn=lambda data, key: ", ".join(
+                        data.rooms.get(key, RoomData()).unknown_people
+                    ),
+                    **device_params,
+                ),
+            ]
+        )
 
     async_add_entities(
         [
@@ -237,26 +194,24 @@ class WelkomAreaSensorDescription(SensorEntityDescription):
     """A class that describes tracker entities."""
 
     client: WelkomClient
+    context: str
 
     has_entity_name: bool = True
     name: str | None = None
 
     device_name: str
     device_id: str
-    sensor_id: str | None = None
     entity_picture: str | None = None
     suggested_area: str | None = None
 
-    value_fn: Callable[[WelkomData, str], Any] = lambda _, __: None
+    value_fn: Callable[[WelkomData, str], StateType | date | datetime | Decimal] = (
+        lambda _, __: None
+    )
 
     @property
     def unique_id(self) -> str:
-        """The unique ID of the entity."""
-        id = self.device_id
-        if self.sensor_id:
-            id += "_" + self.sensor_id
-
-        return id
+        """The unique id of the entity."""
+        return "_".join([x for x in [self.device_id, self.key] if x])
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -285,7 +240,7 @@ class WelkomAreaSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
 
         self.entity_description = entity_description
 
-        super().__init__(coordinator, context=self.entity_description.key)
+        super().__init__(coordinator, context=entity_description.context)
 
         self._attr_unique_id = entity_description.unique_id
         self._attr_device_info = entity_description.device_info

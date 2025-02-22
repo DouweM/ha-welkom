@@ -18,7 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import WelkomClient
-from .models import ConnectedPerson
+from .models import ConnectedPerson, Device, Home, Person, Room
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,10 +49,12 @@ class RoomData(AreaData):
 class PersonData(BaseModel):
     """Data for a person."""
 
-    state: str | None = None
+    person: Person | None = None
+    device: Device | None = None
+    home: Home
+    room: Room | None = None
 
-    home_id: str | None = None
-    room_id: str | None = None
+    state: str | None = None
 
     latitude: float | None = None
     longitude: float | None = None
@@ -66,10 +68,17 @@ class WelkomData(BaseModel):
     homes: dict[str, HomeData] = {}
     rooms: dict[str, RoomData] = {}
     people: dict[str, PersonData] = {}
+    unknown_people: list[PersonData] = []
 
 
 class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
     """My custom coordinator."""
+
+    homes: dict[str, Home] | None = None
+    people: dict[str, Person] | None = None
+
+    _home: Home | None = None
+    _rooms: dict[str, Room] | None = None
 
     def __init__(
         self, hass: HomeAssistant, config_entry: WelkomConfigEntry, client: WelkomClient
@@ -87,14 +96,54 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
     async def _async_setup(self):
         async with asyncio.timeout(10):
-            await asyncio.gather(
+            self.homes, self.people = await asyncio.gather(
                 # self.client.connection,
-                self.client.homes,  # TODO: Should this be stored here, not cached on client?
+                self.client.homes,
                 self.client.people,
             )
+            # Set self.home and self.rooms as well, no async necessary.
+
+    @property
+    def home(self) -> Home:
+        if self._home is None:
+            homes = self.homes
+            if homes is None:
+                raise ValueError("No homes found")
+
+            home_id = self.client.home_id
+            home = None
+            if home_id:
+                if home_id not in homes:
+                    raise ValueError(
+                        f"Home '{home_id}' not found. Available homes: {', '.join(homes.keys())}"
+                    )
+
+                home = homes[home_id]
+            elif len(homes) == 1:
+                home = next(iter(homes.values()))
+            else:
+                raise ValueError(
+                    "You have multiple homes, please specify the 'home_id' in the configuration. "
+                    f"Available homes: {', '.join(homes.keys())}"
+                )
+
+            self._home = home
+
+        return self._home
+
+    @property
+    def rooms(self) -> dict[str, Room] | None:
+        if self._rooms is None:
+            home = self.home
+            if home is None:
+                return None
+
+            self._rooms = {room.id: room for room in home.rooms}
+
+        return self._rooms
 
     def _update_area_data(self, area_data: AreaData, conn: ConnectedPerson):
-        area_data.people_count += 1  # TODO: Use list length instead
+        area_data.people_count += 1  # TODO: Use list length instead?
         area_data.people.append(conn.person.display_name)
 
         if conn.known:
@@ -110,11 +159,11 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         homes: dict[str, HomeData] = defaultdict(HomeData)
         rooms: dict[str, RoomData] = defaultdict(RoomData)
         people: dict[str, PersonData] = {}
+        unknown_people: list[PersonData] = []
 
-        zone_lat_longs = self._zone_lat_longs
-
+        people_by_state: dict[str, list[PersonData]] = defaultdict(list)
         for conn in conns:
-            main_home = await self.client.home
+            main_home = self.home
 
             home = conn.home or main_home
             room = conn.room
@@ -127,15 +176,20 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 if room:
                     state += f": {room.display_name}"
 
-            lat, lon = zone_lat_longs.get(state.casefold(), (None, None))
-
-            people[conn.person.id] = PersonData(
-                home_id=home.id,
-                room_id=room.id if room else None,
+            person = PersonData(
+                person=conn.person,
+                device=conn.connection.device,
+                home=home,
+                room=room,
                 state=state,
-                latitude=lat,
-                longitude=lon,
             )
+
+            if conn.known:
+                people[conn.person.id] = person
+            else:
+                unknown_people.append(person)
+
+            people_by_state[state].append(person)
 
             if home:
                 self._update_area_data(homes[home.id], conn)
@@ -143,17 +197,36 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             if home == main_home and room:
                 self._update_area_data(rooms[room.id], conn)
 
+        zone_lat_longs = self._zone_lat_longs
+        for state, state_people in people_by_state.items():
+            try:
+                lat, lon = zone_lat_longs[state.casefold()]
+
+                # TODO: This affects locations on the map, should only be used for those actually shown?
+                # distance_between_people = 0.00003
+                # offset = (len(state_people) - 1) * (distance_between_people / 2) * -1
+
+                for person in state_people:
+                    person.latitude = lat
+                    person.longitude = lon
+
+                    # person.longitude += offset
+                    # offset += distance_between_people
+            except KeyError:
+                continue
+
         return WelkomData(
             homes=homes,
             rooms=rooms,
             people=people,
+            unknown_people=unknown_people,
         )
 
     @property
-    def _zone_lat_longs(self) -> dict[str, tuple[float | None, float | None]]:
+    def _zone_lat_longs(self) -> dict[str, tuple[float, float]]:
         hass = self.hass
 
-        result = {}
+        result: dict[str, tuple[float, float]] = {}
         for zone_entity_id in hass.data.get(ZONE_ENTITY_IDS, ()):
             zone = hass.states.get(zone_entity_id)
             if not zone or zone.state == STATE_UNAVAILABLE:
