@@ -211,7 +211,7 @@ class WelkomAreaSensorDescription(SensorEntityDescription):
     @property
     def unique_id(self) -> str:
         """The unique id of the entity."""
-        return "_".join([x for x in [self.device_id, self.key] if x])
+        return f"{self.device_id}_{self.key}"
 
     @property
     def device_info(self) -> DeviceInfo:

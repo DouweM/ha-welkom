@@ -46,6 +46,7 @@ async def async_setup_entry(
         entity_descriptions.append(
             WelkomTrackerDescription(
                 key="tracker",
+                key_in_unique_id=False,
                 client=client,
                 context=person_id,
                 device_id=person.unique_id,
@@ -90,8 +91,10 @@ class WelkomTrackerDescription(TrackerEntityDescription):
     has_entity_name: bool = True
     name: str | None = None
 
-    device_name: str | None = None
-    device_id: str | None = None
+    key_in_unique_id: bool = True
+
+    device_name: str
+    device_id: str
     entity_picture: str | None = None
 
     data_fn: Callable[[WelkomData, Any], PersonData | None] = lambda _, __: None
@@ -99,14 +102,14 @@ class WelkomTrackerDescription(TrackerEntityDescription):
     @property
     def unique_id(self) -> str:
         """The unique id of the entity."""
-        return "_".join([x for x in [self.device_id, self.key] if x])
+        if self.key_in_unique_id:
+            return f"{self.device_id}_{self.key}"
+
+        return self.device_id
 
     @property
     def device_info(self) -> DeviceInfo | None:
         """The device info of the home."""
-        if not self.device_id:
-            return None
-
         return DeviceInfo(
             name=self.device_name,
             identifiers={(DOMAIN, self.device_id)},

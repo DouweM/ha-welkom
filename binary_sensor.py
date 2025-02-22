@@ -33,6 +33,7 @@ async def async_setup_entry(
     entity_descriptions = [
         WelkomPresenceSensorDescription(
             key="presence",
+            key_in_unique_id=False,
             client=client,
             context=person_id,
             device_id=person.unique_id,
@@ -64,15 +65,20 @@ class WelkomPresenceSensorDescription(BinarySensorEntityDescription):
     has_entity_name: bool = True
     name: str | None = None
 
-    device_class: BinarySensorDeviceClass = BinarySensorDeviceClass.PRESENCE
-    device_name: str | None = None
-    device_id: str | None = None
+    key_in_unique_id: bool = True
+
+    device_name: str
+    device_id: str
     entity_picture: str | None = None
+    device_class: BinarySensorDeviceClass = BinarySensorDeviceClass.PRESENCE
 
     @property
     def unique_id(self) -> str:
         """The unique ID of the person."""
-        return "_".join([x for x in [self.device_id, self.key] if x])
+        if self.key_in_unique_id:
+            return f"{self.device_id}_{self.key}"
+
+        return self.device_id
 
     @property
     def device_info(self) -> DeviceInfo:
