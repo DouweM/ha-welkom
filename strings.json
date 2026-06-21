@@ -9,7 +9,7 @@
         },
         "data_description": {
           "id": "A unique identifier for this Welkom instance.",
-          "url": "Base URL of the Welkom server, e.g. https://welcome.example.com.",
+          "url": "Base URL of the Welkom server.",
           "home_id": "Optional home to scope this instance to, when the server has more than one."
         }
       },

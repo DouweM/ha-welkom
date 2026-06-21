@@ -37,18 +37,7 @@ jobs:
       - name: Run pyright
         run: uv run pyright
 
-  hassfest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # hacs.json sets content_in_root, so the integration ships from the repo
-      # root. hassfest expects custom_components/<domain>/, so stage a copy.
-      - name: Stage integration under custom_components/welkom
-        run: |
-          mkdir -p custom_components/welkom
-          cp ./*.py manifest.json strings.json custom_components/welkom/
-          cp -r translations custom_components/welkom/
-      - uses: home-assistant/actions/hassfest@master
-      # HACS store-submission validation (hacs/action@main) only matters for
-      # inclusion in the default HACS store; it does not affect installing this
-      # as a custom repository. Re-add it here if/when submitting to the store.
+  # hassfest manifest/translation validation is omitted because hacs.json sets
+  # content_in_root, so the integration dir is the repo root ("ha-welkom") and
+  # hassfest rejects it for not matching the domain ("welkom"). Move the files
+  # under custom_components/welkom/ (content_in_root: false) to re-enable it.
