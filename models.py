@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 import urllib.parse
 
@@ -20,7 +20,7 @@ class Network(BaseModel):
         return "mdi:" + self.attrs.mdi_icon if self.attrs.mdi_icon else None
 
 
-class DeviceType(str, Enum):
+class DeviceType(StrEnum):
     phone = "phone"
     wearable = "wearable"
     handheld = "handheld"

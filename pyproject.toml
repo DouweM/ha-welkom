@@ -1,0 +1,50 @@
+[project]
+name = "ha-welkom"
+version = "0.0.2"
+description = "Welkom integration for Home Assistant"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "homeassistant",
+    "pydantic",
+    "ruff",
+    "pyright",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "ASYNC", # flake8-async
+    "B",     # flake8-bugbear
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort
+    "RUF",   # ruff-specific rules
+    "SIM",   # flake8-simplify
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+]
+# Line length is handled by the formatter; long URLs/strings are fine.
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+combine-as-imports = true
+known-first-party = ["homeassistant"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+exclude = ["**/__pycache__", ".venv"]
+# Subclassing HA's Entity/EntityDescription with a narrowed type and setting
+# `_attr_*`/`entity_description` overrides is the documented integration
+# pattern; pyright flags these as incompatible overrides on every component.
+reportIncompatibleVariableOverride = false
+reportIncompatibleMethodOverride = false
+reportPrivateImportUsage = false

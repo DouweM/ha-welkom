@@ -1,9 +1,10 @@
 """Device tracker platform for Welkom."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.components.sensor.const import SensorStateClass
@@ -55,9 +56,9 @@ async def async_setup_entry(
                     icon=home.icon,
                     key="people_count",
                     **NUMBER_PARAMS,
-                    value_fn=lambda data, key: data.homes.get(
-                        key, HomeData()
-                    ).people_count,
+                    value_fn=lambda data, key: (
+                        data.homes.get(key, HomeData()).people_count
+                    ),
                     **device_params,
                 ),
                 WelkomAreaSensorDescription(
@@ -74,9 +75,9 @@ async def async_setup_entry(
                     name="Known people count",
                     icon="mdi:account-check",
                     **NUMBER_PARAMS,
-                    value_fn=lambda data, key: data.homes.get(
-                        key, HomeData()
-                    ).known_people_count,
+                    value_fn=lambda data, key: (
+                        data.homes.get(key, HomeData()).known_people_count
+                    ),
                     **device_params,
                 ),
                 WelkomAreaSensorDescription(
@@ -93,9 +94,9 @@ async def async_setup_entry(
                     name="Unknown people count",
                     icon="mdi:account-question",
                     **NUMBER_PARAMS,
-                    value_fn=lambda data, key: data.homes.get(
-                        key, HomeData()
-                    ).unknown_people_count,
+                    value_fn=lambda data, key: (
+                        data.homes.get(key, HomeData()).unknown_people_count
+                    ),
                     **device_params,
                 ),
                 WelkomAreaSensorDescription(
@@ -123,9 +124,9 @@ async def async_setup_entry(
                     key="people_count",
                     icon=room.icon,
                     **NUMBER_PARAMS,
-                    value_fn=lambda data, key: data.rooms.get(
-                        key, RoomData()
-                    ).people_count,
+                    value_fn=lambda data, key: (
+                        data.rooms.get(key, RoomData()).people_count
+                    ),
                     **device_params,
                 ),
                 WelkomAreaSensorDescription(
@@ -142,9 +143,9 @@ async def async_setup_entry(
                     name="Known people count",
                     icon="mdi:account-check",
                     **NUMBER_PARAMS,
-                    value_fn=lambda data, key: data.rooms.get(
-                        key, RoomData()
-                    ).known_people_count,
+                    value_fn=lambda data, key: (
+                        data.rooms.get(key, RoomData()).known_people_count
+                    ),
                     **device_params,
                 ),
                 WelkomAreaSensorDescription(
@@ -161,9 +162,9 @@ async def async_setup_entry(
                     name="Unknown people count",
                     icon="mdi:account-question",
                     **NUMBER_PARAMS,
-                    value_fn=lambda data, key: data.rooms.get(
-                        key, RoomData()
-                    ).unknown_people_count,
+                    value_fn=lambda data, key: (
+                        data.rooms.get(key, RoomData()).unknown_people_count
+                    ),
                     **device_params,
                 ),
                 WelkomAreaSensorDescription(
