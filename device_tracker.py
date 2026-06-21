@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.components.device_tracker import TrackerEntity
 from homeassistant.components.device_tracker.config_entry import (
-    TrackerEntityDescription,
+    TrackerEntityDescription,  # pyright: ignore[reportAttributeAccessIssue]  # lazy HA __getattr__ export
 )
 from homeassistant.const import STATE_NOT_HOME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
@@ -182,7 +182,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         self.async_write_ha_state()
 
     @property
-    def state(self) -> str | None:
+    def state(self) -> StateType:
         """Get the state of the entity."""
         return self._attr_state
 

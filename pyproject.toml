@@ -41,10 +41,15 @@ known-first-party = ["homeassistant"]
 
 [tool.pyright]
 pythonVersion = "3.13"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
 exclude = ["**/__pycache__", ".venv"]
 # Subclassing HA's Entity/EntityDescription with a narrowed type and setting
 # `_attr_*`/`entity_description` overrides is the documented integration
 # pattern; pyright flags these as incompatible overrides on every component.
+# HA also lazy-exports some symbols via module __getattr__, which pyright
+# cannot see statically (e.g. TrackerEntityDescription).
 reportIncompatibleVariableOverride = false
 reportIncompatibleMethodOverride = false
 reportPrivateImportUsage = false
