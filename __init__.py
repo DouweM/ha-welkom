@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.const import CONF_ID, CONF_URL, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 
 from .client import WelkomClient
@@ -43,6 +43,23 @@ async def async_setup_entry(
         # sw_version=config.swversion,
         # hw_version=config.hwversion,
     )
+
+    @callback
+    def _prune_removed_people() -> None:
+        """Remove devices for people no longer present in the configuration."""
+        current_ids = set(coordinator.people or {})
+        for device in dr.async_entries_for_config_entry(
+            device_registry, config_entry.entry_id
+        ):
+            for domain, identifier in device.identifiers:
+                if domain != DOMAIN or not identifier.startswith("person_"):
+                    continue
+                if identifier.removeprefix("person_") not in current_ids:
+                    device_registry.async_remove_device(device.id)
+                break
+
+    _prune_removed_people()
+    config_entry.async_on_unload(coordinator.async_add_listener(_prune_removed_people))
 
     await hass.config_entries.async_forward_entry_setups(config_entry, _PLATFORMS)
 
