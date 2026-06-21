@@ -3,7 +3,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel
 
-from .models import ConnectedPerson, Connection, Home, Person, Room
+from .models import ConnectedPerson, Connection, Home, Person
 
 
 class WelkomClient(BaseModel):
@@ -50,9 +50,14 @@ class WelkomClient(BaseModel):
     @property
     async def people(self) -> dict[str, Person]:
         if self._people is None:
-            raw_people = await self.request(f"{self.url}/api/people")
-            people = [Person.model_validate(person) for person in raw_people]
-            self._people = {person.id: person for person in people}
+            return await self.fetch_people()
+        return self._people
+
+    async def fetch_people(self) -> dict[str, Person]:
+        """Fetch the people list from the API, bypassing the cache."""
+        raw_people = await self.request(f"{self.url}/api/people")
+        people = [Person.model_validate(person) for person in raw_people]
+        self._people = {person.id: person for person in people}
         return self._people
 
     # @property

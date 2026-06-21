@@ -15,7 +15,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .client import WelkomClient
 from .const import DOMAIN
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
-from .models import Person
 
 
 async def async_setup_entry(
@@ -28,31 +27,35 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data
     client = coordinator.client
 
-    people = await client.people
+    known_ids: set[str] = set()
 
-    entity_descriptions = [
-        WelkomPresenceSensorDescription(
-            key="presence",
-            key_in_unique_id=False,
-            client=client,
-            context=person_id,
-            device_id=person.unique_id,
-            device_name=person.display_name,
-            icon=person.icon,
-            entity_picture=person.avatar_url,
-        )
-        for person_id, person in people.items()
-    ]
+    @callback
+    def _add_new_people() -> None:
+        people = coordinator.people or {}
+        new_ids = [person_id for person_id in people if person_id not in known_ids]
+        if not new_ids:
+            return
 
-    async_add_entities(
-        [
+        known_ids.update(new_ids)
+        async_add_entities(
             WelkomPresenceSensor(
                 coordinator,
-                entity_description=entity_description,
+                entity_description=WelkomPresenceSensorDescription(
+                    key="presence",
+                    key_in_unique_id=False,
+                    client=client,
+                    context=person_id,
+                    device_id=people[person_id].unique_id,
+                    device_name=people[person_id].display_name,
+                    icon=people[person_id].icon,
+                    entity_picture=people[person_id].avatar_url,
+                ),
             )
-            for entity_description in entity_descriptions
-        ]
-    )
+            for person_id in new_ids
+        )
+
+    _add_new_people()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new_people))
 
 
 @dataclass(frozen=True, kw_only=True)

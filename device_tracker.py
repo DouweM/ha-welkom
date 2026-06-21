@@ -1,7 +1,8 @@
 """Device tracker platform for Welkom."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from homeassistant.components.device_tracker import TrackerEntity
 from homeassistant.components.device_tracker.config_entry import (
@@ -29,10 +30,6 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data
     client = coordinator.client
 
-    people = await client.people
-
-    entity_descriptions: list[WelkomTrackerDescription] = []
-
     def get_person_data(data: WelkomData, id: str) -> PersonData | None:
         return data.people.get(id)
 
@@ -42,43 +39,53 @@ async def async_setup_entry(
         except IndexError:
             return None
 
-    for person_id, person in people.items():
-        entity_descriptions.append(
-            WelkomTrackerDescription(
+    # Fixed slots for unknown people, added once.
+    async_add_entities(
+        WelkomTracker(
+            coordinator,
+            entity_description=WelkomTrackerDescription(
                 key="tracker",
-                key_in_unique_id=False,
                 client=client,
-                context=person_id,
-                device_id=person.unique_id,
-                device_name=person.display_name,
-                icon=person.icon,
-                entity_picture=person.avatar_url,
-                data_fn=get_person_data,
-            )
-        )
-
-    entity_descriptions.extend(
-        WelkomTrackerDescription(
-            key="tracker",
-            client=client,
-            context=idx,
-            device_id=f"unknown_person_{idx + 1}",
-            device_name=f"Unknown Person {idx + 1}",
-            icon="mdi:account-question",
-            data_fn=get_unknown_person_data,
+                context=idx,
+                device_id=f"unknown_person_{idx + 1}",
+                device_name=f"Unknown Person {idx + 1}",
+                icon="mdi:account-question",
+                data_fn=get_unknown_person_data,
+            ),
         )
         for idx in range(10)
     )
 
-    async_add_entities(
-        [
+    known_ids: set[str] = set()
+
+    @callback
+    def _add_new_people() -> None:
+        people = coordinator.people or {}
+        new_ids = [person_id for person_id in people if person_id not in known_ids]
+        if not new_ids:
+            return
+
+        known_ids.update(new_ids)
+        async_add_entities(
             WelkomTracker(
                 coordinator,
-                entity_description=entity_description,
+                entity_description=WelkomTrackerDescription(
+                    key="tracker",
+                    key_in_unique_id=False,
+                    client=client,
+                    context=person_id,
+                    device_id=people[person_id].unique_id,
+                    device_name=people[person_id].display_name,
+                    icon=people[person_id].icon,
+                    entity_picture=people[person_id].avatar_url,
+                    data_fn=get_person_data,
+                ),
             )
-            for entity_description in entity_descriptions
-        ]
-    )
+            for person_id in new_ids
+        )
+
+    _add_new_people()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new_people))
 
 
 @dataclass(frozen=True, kw_only=True)

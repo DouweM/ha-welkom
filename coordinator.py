@@ -154,6 +154,11 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             area_data.unknown_people.append(conn.person.display_name)
 
     async def _async_update_data(self):
+        # Refresh the configured people so newly-added people are picked up
+        # without a full integration reload. The platforms read
+        # `coordinator.people` and add entities for any new ids.
+        self.people = await self.client.fetch_people()
+
         conns = await self.client.connected_people
 
         homes: dict[str, HomeData] = defaultdict(HomeData)
