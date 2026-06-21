@@ -5,15 +5,25 @@
         },
         "error": {
             "cannot_connect": "Failed to connect",
-            "invalid_auth": "Invalid authentication",
             "unknown": "Unexpected error"
         },
         "step": {
             "user": {
                 "data": {
-                    "host": "Host",
-                    "password": "Password",
-                    "username": "Username"
+                    "id": "ID",
+                    "url": "URL",
+                    "home_id": "Home ID"
+                },
+                "data_description": {
+                    "id": "A unique identifier for this Welkom instance.",
+                    "url": "Base URL of the Welkom server, e.g. https://welcome.example.com.",
+                    "home_id": "Optional home to scope this instance to, when the server has more than one."
+                }
+            },
+            "reconfigure": {
+                "data": {
+                    "url": "URL",
+                    "home_id": "Home ID"
                 }
             }
         }

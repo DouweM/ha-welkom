@@ -5,18 +5,19 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_ID, CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import CONF_HOME_ID, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# TODO adjust the data schema to the data that you need
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_ID): str,
@@ -32,45 +33,18 @@ STEP_RECONFIGURE_DATA_SCHEMA = vol.Schema(
     }
 )
 
-# class PlaceholderHub:
-#     """Placeholder class to make tests pass.
-
-#     TODO Remove this placeholder class and replace with things from your PyPI package.
-#     """
-
-#     def __init__(self, host: str) -> None:
-#         """Initialize."""
-#         self.host = host
-
-#     async def authenticate(self, username: str, password: str) -> bool:
-#         """Test if we can authenticate with the host."""
-#         return True
-
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
+    """Validate the user input by connecting to the Welkom API."""
+    session = async_get_clientsession(hass)
+    url = data[CONF_URL].rstrip("/")
 
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
-    """
-    # TODO validate the data can be used to set up a connection.
+    try:
+        async with session.get(f"{url}/api/homes") as response:
+            response.raise_for_status()
+    except (aiohttp.ClientError, TimeoutError) as err:
+        raise CannotConnect from err
 
-    # If your PyPI package is not built with async, pass your methods
-    # to the executor:
-    # await hass.async_add_executor_job(
-    #     your_validate_func, data[CONF_USERNAME], data[CONF_PASSWORD]
-    # )
-
-    # hub = PlaceholderHub(data[CONF_HOST])
-
-    # if not await hub.authenticate(data[CONF_USERNAME], data[CONF_PASSWORD]):
-    #     raise InvalidAuth
-
-    # If you cannot connect:
-    # throw CannotConnect
-    # If the authentication is wrong:
-    # InvalidAuth
-
-    # Return info that you want to store in the config entry.
     return {"title": data[CONF_ID]}
 
 
@@ -92,8 +66,6 @@ class WelkomConfigFlow(ConfigFlow, domain=DOMAIN):
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
             except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
@@ -107,17 +79,23 @@ class WelkomConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Handle reconfiguration of an existing entry."""
         entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            # ID cannot be edited, so not necessary:
-            # await self.async_set_unique_id(user_input[CONF_ID])
-            # self._abort_if_unique_id_mismatch()
-
-            return self.async_update_reload_and_abort(
-                entry,
-                data_updates=user_input,
-            )
+            try:
+                await validate_input(self.hass, {**entry.data, **user_input})
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates=user_input,
+                )
 
         return self.async_show_form(
             step_id="reconfigure",
@@ -127,14 +105,10 @@ class WelkomConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_URL: entry.data[CONF_URL],
                     CONF_HOME_ID: entry.data.get(CONF_HOME_ID),
                 },
-                # TODO: errors
             ),
+            errors=errors,
         )
 
 
 class CannotConnect(HomeAssistantError):
     """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(HomeAssistantError):
-    """Error to indicate there is invalid auth."""
