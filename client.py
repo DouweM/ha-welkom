@@ -3,7 +3,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel
 
-from .models import ConnectedPerson, Connection, Home, Person
+from .models import ConnectedPerson, Connection, Home, Person, Role
 
 
 class WelkomClient(BaseModel):
@@ -18,6 +18,7 @@ class WelkomClient(BaseModel):
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
     _people: dict[str, Person] | None = None
+    _roles: list[Role] | None = None
     # _devices: dict[str, Device] | None = None
 
     @property
@@ -68,6 +69,19 @@ class WelkomClient(BaseModel):
     #         # TODO: What ID to use?
     #         self._devices = {device.id: device for device in devices}
     #     return self._devices
+
+    @property
+    async def roles(self) -> list[Role]:
+        """The configured roles, ordered from least to most privileged."""
+        if self._roles is None:
+            raw_roles = await self.request(f"{self.url}/api/roles")
+            self._roles = [Role.model_validate(role) for role in raw_roles]
+        return self._roles
+
+    @property
+    async def connections(self) -> list[Connection]:
+        raw_connections = await self.request(f"{self.url}/api/homes/connections")
+        return [Connection.model_validate(connection) for connection in raw_connections]
 
     @property
     async def connected_people(self) -> list[ConnectedPerson]:

@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 import urllib.parse
@@ -31,24 +32,23 @@ class DeviceType(StrEnum):
 
     other = "other"
 
-    # @computed_field
-    # @property
-    # def icon(self) -> str | None:
-    #     match self:
-    #         case DeviceType.phone | DeviceType.handheld:
-    #             return "iphone"
-    #         case DeviceType.wearable:
-    #             return "applewatch"
+    @property
+    def mdi_icon(self) -> str:
+        match self:
+            case DeviceType.phone | DeviceType.handheld:
+                return "cellphone"
+            case DeviceType.wearable:
+                return "watch"
 
-    #         case DeviceType.tablet:
-    #             return "ipad"
-    #         case DeviceType.desktop:
-    #             return "desktopcomputer"
-    #         case DeviceType.laptop:
-    #             return "laptopcomputer"
+            case DeviceType.tablet:
+                return "tablet"
+            case DeviceType.desktop:
+                return "desktop-classic"
+            case DeviceType.laptop:
+                return "laptop"
 
-    #         case _:
-    #             return None
+            case _:
+                return "devices"
 
 
 class Device(BaseModel):
@@ -62,10 +62,10 @@ class Device(BaseModel):
     tracker: bool
     personal: bool
 
-    # @computed_field
-    # @property
-    # def icon(self) -> str | None:
-    #     return self.type.icon if self.type else None
+    @computed_field
+    @property
+    def icon(self) -> str:
+        return "mdi:" + (self.type.mdi_icon if self.type else "devices")
 
 
 class Person(BaseModel):
@@ -280,6 +280,9 @@ class Metadata(BaseModel):
     mac_is_private: bool = False
     wifi_ssid: str | None = None
 
+    online: bool | None = None
+    last_seen: datetime | None = None
+
     # country: CountryAlpha2 | None = None
 
 
@@ -312,6 +315,19 @@ class Connection(BaseModel):
         return False
 
 
+class Activity(BaseModel):
+    """A person's most recent use of a tracked service (e.g. Home Assistant)."""
+
+    device: str
+    device_type: DeviceType | None = None
+    network_id: str
+    role_id: str
+    room_id: str | None = None
+    host: str
+    last_seen_at: datetime
+    metadata: Metadata = Metadata()
+
+
 class ConnectedPerson(BaseModel):
     known: bool
 
@@ -323,3 +339,5 @@ class ConnectedPerson(BaseModel):
     role: Role
 
     connection: Connection
+
+    activity: Activity | None = None

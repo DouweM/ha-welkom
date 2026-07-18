@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any, cast
 
@@ -16,9 +16,19 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import slugify
 
 from .client import WelkomClient
-from .models import ConnectedPerson, Device, Home, Person, Room
+from .models import (
+    Activity,
+    ConnectedPerson,
+    Connection,
+    Device,
+    Home,
+    Person,
+    Role,
+    Room,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +69,23 @@ class PersonData(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
 
+    activity: Activity | None = None
+
     # Do we need an eq method here for always_update=False to work?
+
+
+class DeviceData(BaseModel):
+    """Data for a (tracker or personal) device and its active connections."""
+
+    device: Device
+    connections: list[Connection] = []
+
+    connection: Connection | None = None
+    """The primary connection: online first, then highest role, then most recently seen."""
+
+    @property
+    def state(self) -> str | None:
+        return self.connection.network.id if self.connection else None
 
 
 class WelkomData(BaseModel):
@@ -69,6 +95,7 @@ class WelkomData(BaseModel):
     rooms: dict[str, RoomData] = {}
     people: dict[str, PersonData] = {}
     unknown_people: list[PersonData] = []
+    devices: dict[str, DeviceData] = {}
 
 
 class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
@@ -76,6 +103,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
     homes: dict[str, Home] | None = None
     people: dict[str, Person] | None = None
+    roles: list[Role] | None = None
 
     _home: Home | None = None
     _rooms: dict[str, Room] | None = None
@@ -96,10 +124,11 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
     async def _async_setup(self):
         async with asyncio.timeout(10):
-            self.homes, self.people = await asyncio.gather(
+            self.homes, self.people, self.roles = await asyncio.gather(
                 # self.client.connection,
                 self.client.homes,
                 self.client.people,
+                self.client.roles,
             )
             # Set self.home and self.rooms as well, no async necessary.
 
@@ -153,13 +182,47 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             area_data.unknown_people_count += 1
             area_data.unknown_people.append(conn.person.display_name)
 
+    def _role_priority(self, role_id: str) -> int:
+        roles = self.roles or []
+        return next((i for i, role in enumerate(roles) if role.id == role_id), -1)
+
+    def _connection_priority(self, conn: Connection) -> tuple[bool, int, datetime]:
+        last_seen = conn.metadata.last_seen or datetime.min
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=UTC)
+
+        return (
+            bool(conn.metadata.online),
+            self._role_priority(conn.role.id),
+            last_seen,
+        )
+
+    def _device_data(self, connections: list[Connection]) -> dict[str, DeviceData]:
+        devices: dict[str, DeviceData] = {}
+        for conn in connections:
+            device = conn.device
+            if not device.known or not (device.tracker or device.personal):
+                continue
+
+            key = slugify(device.display_name)
+            data = devices.setdefault(key, DeviceData(device=device))
+            data.connections.append(conn)
+
+        for data in devices.values():
+            data.connection = max(data.connections, key=self._connection_priority)
+
+        return devices
+
     async def _async_update_data(self):
         # Refresh the configured people so newly-added people are picked up
         # without a full integration reload. The platforms read
         # `coordinator.people` and add entities for any new ids.
         self.people = await self.client.fetch_people()
 
-        conns = await self.client.connected_people
+        conns, connections = await asyncio.gather(
+            self.client.connected_people,
+            self.client.connections,
+        )
 
         homes: dict[str, HomeData] = defaultdict(HomeData)
         rooms: dict[str, RoomData] = defaultdict(RoomData)
@@ -187,6 +250,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 home=home,
                 room=room,
                 state=state,
+                activity=conn.activity,
             )
 
             if conn.known:
@@ -225,6 +289,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             rooms=rooms,
             people=people,
             unknown_people=unknown_people,
+            devices=self._device_data(connections),
         )
 
     @property

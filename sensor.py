@@ -17,12 +17,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .client import WelkomClient
 from .const import DOMAIN
 from .coordinator import (
+    DeviceData,
     HomeData,
     RoomData,
     WelkomConfigEntry,
     WelkomCoordinator,
     WelkomData,
 )
+from .models import Activity
 
 NUMBER_PARAMS = {
     "state_class": SensorStateClass.MEASUREMENT,
@@ -189,6 +191,67 @@ async def async_setup_entry(
         ]
     )
 
+    # Per-person "current device" sensors, added as people appear.
+    known_person_ids: set[str] = set()
+
+    @callback
+    def _add_new_people() -> None:
+        people = coordinator.people or {}
+        new_ids = [
+            person_id for person_id in people if person_id not in known_person_ids
+        ]
+        if not new_ids:
+            return
+
+        known_person_ids.update(new_ids)
+        async_add_entities(
+            WelkomCurrentDeviceSensor(
+                coordinator,
+                entity_description=WelkomPersonSensorDescription(
+                    key="current_device",
+                    name="Current device",
+                    client=client,
+                    context=person_id,
+                    device_id=people[person_id].unique_id,
+                    device_name=people[person_id].display_name,
+                ),
+            )
+            for person_id in new_ids
+        )
+
+    _add_new_people()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new_people))
+
+    # Per-device connection sensors, added as devices appear.
+    known_device_keys: set[str] = set()
+
+    @callback
+    def _add_new_devices() -> None:
+        devices = coordinator.data.devices if coordinator.data else {}
+        new_keys = [key for key in devices if key not in known_device_keys]
+        if not new_keys:
+            return
+
+        known_device_keys.update(new_keys)
+        async_add_entities(
+            WelkomConnectionSensor(
+                coordinator,
+                entity_description=WelkomDeviceSensorDescription(
+                    key="connection",
+                    name="Connection",
+                    client=client,
+                    context=key,
+                    device_id=f"device_{key}",
+                    device_name=devices[key].device.display_name,
+                    icon=devices[key].device.icon,
+                ),
+            )
+            for key in new_keys
+        )
+
+    _add_new_devices()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new_devices))
+
 
 @dataclass(frozen=True, kw_only=True)
 class WelkomAreaSensorDescription(SensorEntityDescription):
@@ -256,6 +319,207 @@ class WelkomAreaSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
         self._attr_native_value = self.entity_description.value_fn(
             self.coordinator.data, self.coordinator_context
         )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+
+        self._async_update_attrs()
+        self.async_write_ha_state()
+
+
+@dataclass(frozen=True, kw_only=True)
+class WelkomPersonSensorDescription(SensorEntityDescription):
+    """A class that describes person sensor entities."""
+
+    client: WelkomClient
+    context: str
+
+    has_entity_name: bool = True
+    name: str | None = None
+
+    device_name: str
+    device_id: str
+
+    @property
+    def unique_id(self) -> str:
+        """The unique id of the entity."""
+        return f"{self.device_id}_{self.key}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """The device info of the person."""
+        return DeviceInfo(
+            name=self.device_name,
+            identifiers={(DOMAIN, self.device_id)},
+            via_device=(DOMAIN, self.client.unique_id),
+        )
+
+
+class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
+    """The device a person is currently using to access a tracked service."""
+
+    _attr_device_info: DeviceInfo | None = None
+
+    entity_description: WelkomPersonSensorDescription
+
+    def __init__(
+        self,
+        coordinator: WelkomCoordinator,
+        entity_description: WelkomPersonSensorDescription,
+    ):
+        """Initialize the sensor."""
+
+        self.entity_description = entity_description
+
+        super().__init__(coordinator, context=entity_description.context)
+
+        self._attr_unique_id = entity_description.unique_id
+        self._attr_device_info = entity_description.device_info
+
+        self._async_update_attrs()
+
+    @property
+    def activity(self) -> Activity | None:
+        """The person's current activity."""
+        data = self.coordinator.data.people.get(self.coordinator_context)
+        return data.activity if data else None
+
+    @callback
+    def _async_update_attrs(self) -> None:
+        """Update the attributes of the entity."""
+
+        activity = self.activity
+        if not activity:
+            self._attr_native_value = None
+            self._attr_icon = "mdi:cellphone-off"
+            self._attr_extra_state_attributes = {}
+            return
+
+        self._attr_native_value = activity.device
+
+        device_type = activity.device_type
+        self._attr_icon = "mdi:" + (
+            device_type.mdi_icon if device_type else "cellphone"
+        )
+
+        attrs: dict[str, Any] = {
+            "device_type": device_type.value if device_type else None,
+            "network_id": activity.network_id,
+            "role_id": activity.role_id,
+            "host": activity.host,
+            "last_seen_at": activity.last_seen_at,
+        }
+
+        if room_id := activity.room_id:
+            attrs["room_id"] = room_id
+            if room := (self.coordinator.rooms or {}).get(room_id):
+                attrs["room"] = room.display_name
+
+        attrs.update(activity.metadata.model_dump(exclude_unset=True))
+
+        self._attr_extra_state_attributes = attrs
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+
+        self._async_update_attrs()
+        self.async_write_ha_state()
+
+
+@dataclass(frozen=True, kw_only=True)
+class WelkomDeviceSensorDescription(SensorEntityDescription):
+    """A class that describes device sensor entities."""
+
+    client: WelkomClient
+    context: str
+
+    has_entity_name: bool = True
+    name: str | None = None
+
+    device_name: str
+    device_id: str
+
+    @property
+    def unique_id(self) -> str:
+        """The unique id of the entity."""
+        return f"{self.device_id}_{self.key}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """The device info of the device."""
+        return DeviceInfo(
+            name=self.device_name,
+            identifiers={(DOMAIN, self.device_id)},
+            via_device=(DOMAIN, self.client.unique_id),
+        )
+
+
+class WelkomConnectionSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
+    """How a device is currently connected: the network id, or unknown when offline."""
+
+    _attr_device_info: DeviceInfo | None = None
+
+    entity_description: WelkomDeviceSensorDescription
+
+    def __init__(
+        self,
+        coordinator: WelkomCoordinator,
+        entity_description: WelkomDeviceSensorDescription,
+    ):
+        """Initialize the sensor."""
+
+        self.entity_description = entity_description
+
+        super().__init__(coordinator, context=entity_description.context)
+
+        self._attr_unique_id = entity_description.unique_id
+        self._attr_device_info = entity_description.device_info
+
+        self._async_update_attrs()
+
+    @property
+    def data(self) -> DeviceData | None:
+        """The data of the device."""
+        return self.coordinator.data.devices.get(self.coordinator_context)
+
+    @callback
+    def _async_update_attrs(self) -> None:
+        """Update the attributes of the entity."""
+
+        data = self.data
+        conn = data.connection if data else None
+        if not data or not conn:
+            self._attr_native_value = None
+            self._attr_extra_state_attributes = {}
+            return
+
+        self._attr_native_value = data.state
+
+        attrs: dict[str, Any] = {
+            "network": conn.network.display_name,
+            "role_id": conn.role.id,
+        }
+
+        if person := conn.person:
+            attrs["person_id"] = person.id
+            attrs["person"] = person.display_name
+
+        if home := conn.home:
+            attrs["home_id"] = home.id
+            attrs["home"] = home.display_name
+
+        if room := conn.room:
+            attrs["room_id"] = room.id
+            attrs["room"] = room.display_name
+
+        attrs.update(conn.metadata.model_dump(exclude_unset=True))
+
+        if len(data.connections) > 1:
+            attrs["networks"] = [c.network.id for c in data.connections]
+
+        self._attr_extra_state_attributes = attrs
 
     @callback
     def _handle_coordinator_update(self) -> None:
