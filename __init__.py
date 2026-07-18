@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from homeassistant.components import frontend
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ID, CONF_URL, Platform
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import device_registry as dr
 
 from .client import WelkomClient
-from .const import CONF_HOME_ID, DOMAIN
+from .const import CONF_HOME_ID, DOMAIN, FRONTEND_SCRIPT_URL, FRONTEND_SCRIPT_VERSION
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
 
 _PLATFORMS: list[Platform] = [
@@ -17,10 +21,45 @@ _PLATFORMS: list[Platform] = [
 ]
 
 
+async def _async_setup_shared(hass: HomeAssistant) -> None:
+    """Register the refresh service and frontend script, once across entries.
+
+    The frontend script pings a same-origin URL on dashboard load/foreground so
+    the viewing device registers forward-auth activity with welkom, then calls
+    welkom.refresh so the fresh activity shows up within seconds instead of on
+    the next poll.
+    """
+    if hass.services.has_service(DOMAIN, "refresh"):
+        return
+
+    async def _handle_refresh(call: ServiceCall) -> None:
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if isinstance(coordinator, WelkomCoordinator):
+                await coordinator.async_request_refresh()
+
+    hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
+
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                FRONTEND_SCRIPT_URL,
+                str(Path(__file__).parent / "welkom-activity.js"),
+                cache_headers=True,
+            )
+        ]
+    )
+    frontend.add_extra_js_url(
+        hass, f"{FRONTEND_SCRIPT_URL}?v={FRONTEND_SCRIPT_VERSION}"
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: WelkomConfigEntry
 ) -> bool:
     """Set up Welkom from a config entry."""
+
+    await _async_setup_shared(hass)
 
     client = WelkomClient(
         id=config_entry.data[CONF_ID],

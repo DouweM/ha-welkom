@@ -1,0 +1,6 @@
+refresh:
+  name: Refresh
+  description: >-
+    Refresh all Welkom coordinators immediately instead of waiting for the next
+    poll. Called by the bundled frontend script after it registers activity for
+    the viewing device.

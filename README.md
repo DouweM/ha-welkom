@@ -18,6 +18,10 @@ Home Assistant integration for [welkom](https://github.com/DouweM/welcome), the 
 
 Ten fixed `Unknown Person N` tracker slots cover unrecognized personal devices.
 
+### Freshness
+
+The integration bundles a small frontend script (registered automatically) that keeps the current-device sensor fresh: on dashboard load and whenever the page becomes visible — including in the companion app's web view — it pings a same-origin URL so the viewing device registers forward-auth activity with welkom, then calls the `welkom.refresh` service so the sensor updates within seconds instead of on the next 30-second poll. While a dashboard stays visible it pings once a minute, keeping the activity TTL alive (wall tablets stay "current").
+
 ### In automations and templates
 
 ```yaml

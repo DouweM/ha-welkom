@@ -5,10 +5,11 @@
     "@DouweM"
   ],
   "config_flow": true,
+  "dependencies": ["frontend", "http"],
   "documentation": "https://github.com/DouweM/ha-welkom",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/DouweM/ha-welkom/issues",
   "quality_scale": "bronze",
   "requirements": ["pydantic>=2"],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
