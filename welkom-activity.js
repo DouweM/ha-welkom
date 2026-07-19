@@ -5,10 +5,13 @@
 //
 //  - CLAIM (/welkom/claim): sent while the user is actually providing input
 //    (touch, scroll, hover, keys). Welkom lets claims take the person's
-//    current-device slot from any other device. Nothing else counts as
-//    interaction: page loads, foregrounding, and display wakes happen
-//    without a human (app reloads, screen wake, window un-occlusion), and
-//    treating them as interaction let idle machines steal the slot.
+//    current-device slot from any other device. On desktops and tablets
+//    nothing else counts as interaction: page loads, foregrounding, and
+//    display wakes happen without a human (app reloads, screen wake, window
+//    un-occlusion), and treating them as interaction let idle machines steal
+//    the slot. Phones are the exception: a phone app doesn't come to the
+//    foreground without a hand on the device, so becoming visible claims
+//    immediately — no scroll required after opening the app.
 //  - SUSTAIN (/welkom/sustain): sent while the dashboard is merely on
 //    screen. Welkom only lets sustains refresh a claim this device already
 //    holds (or take a vacant slot) — never steal one. So an untouched HA
@@ -34,6 +37,14 @@ const SUSTAIN_FRAMES = 5; // frames a sustain needs within SUSTAIN_FRAMES * 100m
 // layout), which would count as interaction on an untouched screen. Human
 // scrolling is covered by wheel, touchstart, and pointer events.
 const INTERACTION_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"];
+
+// A foregrounded phone is by definition in someone's hand, so visibility
+// alone counts as interaction there. Touch-only (no hover) rules out
+// desktops/laptops; the size cutoff rules out tablets, which can sit open
+// and untouched like a laptop (wall tablets, iPad on a desk).
+const IS_PHONE =
+  matchMedia("(pointer: coarse) and (hover: none)").matches &&
+  Math.min(screen.width, screen.height) <= 500;
 
 let lastInteraction = 0;
 let lastPing = 0;
@@ -113,9 +124,15 @@ for (const event of INTERACTION_EVENTS) {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    tick(); // resume pinging, but becoming visible is not interaction
+    if (IS_PHONE) {
+      lastInteraction = Date.now(); // a foregrounded phone is in hand
+    }
+    tick(); // on non-phones, becoming visible is not interaction
   }
 });
 
 setInterval(tick, TICK_INTERVAL);
+if (IS_PHONE && document.visibilityState === "visible") {
+  lastInteraction = Date.now(); // app opened straight onto the dashboard
+}
 tick();
