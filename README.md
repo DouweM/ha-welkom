@@ -20,7 +20,9 @@ Ten fixed `Unknown Person N` tracker slots cover unrecognized personal devices.
 
 ### Freshness
 
-The integration bundles a small frontend script (registered automatically) that keeps the current-device sensor fresh: on dashboard load and whenever the page becomes visible — including in the companion app's web view — it pings a same-origin URL so the viewing device registers forward-auth activity with welkom, then calls the `welkom.refresh` service so the sensor updates within seconds instead of on the next 30-second poll. While a dashboard stays visible it pings once a minute, keeping the activity TTL alive (wall tablets stay "current").
+The integration bundles a small frontend script (registered automatically) that keeps the current-device sensor fresh: on dashboard load, on foregrounding, and while in active use — including in the companion app's web view — it pings a same-origin URL so the viewing device registers forward-auth activity with welkom, then calls the `welkom.refresh` service so the sensor updates within seconds instead of on the next 30-second poll.
+
+Pings continue (once a minute) only while the page is visible **and** the user has interacted with it in the last ~2.5 minutes — visibility alone isn't trustworthy, since an HA window left open on an idle computer reports as visible and would otherwise claim the current device forever. The flip side: a passively watched display (wall tablet) expires to `unknown` unless it's touched now and then.
 
 ### In automations and templates
 
