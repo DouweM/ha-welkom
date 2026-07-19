@@ -53,8 +53,10 @@ There are two kinds of ping, matching welkom's `services`/`sustain` config: inte
 
   ```yaml
   current_device:
-    services: ['GET https://<your-ha-host>/manifest.json']   # interaction claims
-    sustain: ['GET https://<your-ha-host>/robots.txt']       # on-screen keeps alive
+    services: ['GET https://<your-ha-host>/welkom/claim']    # interaction claims
+    sustain: ['GET https://<your-ha-host>/welkom/sustain']   # on-screen keeps alive
   ```
+
+  The `/welkom/claim` and `/welkom/sustain` endpoints are served by this integration; only the bundled script ever fetches them. (Natural frontend URLs like `/manifest.json` are also fetched by companion apps in the background, which would make idle devices look interactive.)
 
 The integration polls welkom every 30 seconds.

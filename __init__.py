@@ -11,7 +11,14 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import device_registry as dr
 
 from .client import WelkomClient
-from .const import CONF_HOME_ID, DOMAIN, FRONTEND_SCRIPT_URL, FRONTEND_SCRIPT_VERSION
+from .const import (
+    CONF_HOME_ID,
+    DOMAIN,
+    FRONTEND_SCRIPT_URL,
+    FRONTEND_SCRIPT_VERSION,
+    PING_CLAIM_URL,
+    PING_SUSTAIN_URL,
+)
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
 
 _PLATFORMS: list[Platform] = [
@@ -40,13 +47,19 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
 
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
 
+    ping_path = str(Path(__file__).parent / "welkom-ping.txt")
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
                 FRONTEND_SCRIPT_URL,
                 str(Path(__file__).parent / "welkom-activity.js"),
                 cache_headers=True,
-            )
+            ),
+            # Dedicated beacon endpoints: welkom's forward auth counts these
+            # (and only these) as current-device claims/sustains, so they must
+            # be paths nothing but the script ever fetches.
+            StaticPathConfig(PING_CLAIM_URL, ping_path, cache_headers=False),
+            StaticPathConfig(PING_SUSTAIN_URL, ping_path, cache_headers=False),
         ]
     )
     frontend.add_extra_js_url(

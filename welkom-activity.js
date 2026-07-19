@@ -3,14 +3,18 @@
 // Welkom counts these pings (and only these) as current-device usage, so the
 // gating here defines the semantic. Two kinds of ping:
 //
-//  - CLAIM (manifest.json): sent on load, on foregrounding, and while the
+//  - CLAIM (/welkom/claim): sent on load, on foregrounding, and while the
 //    user is interacting (touch, scroll, hover, keys). Welkom lets claims
 //    take the person's current-device slot from any other device.
-//  - SUSTAIN (robots.txt): sent while the dashboard is merely on screen
+//  - SUSTAIN (/welkom/sustain): sent while the dashboard is merely on screen
 //    without recent interaction. Welkom only lets sustains refresh a claim
 //    this device already holds (or take a vacant slot) — never steal one.
 //    So an untouched HA window on a desk, or a wall tablet, stays current
 //    without ever out-competing the phone in the person's hand.
+//
+// The endpoints are registered by the integration itself: natural frontend
+// URLs (like /manifest.json) are also fetched by clients in the background,
+// which made background companion apps look like interactive use.
 //
 // Both are scheduled through requestAnimationFrame, which only fires while
 // the page is actually being rendered: hidden tabs, minimized or occluded
@@ -44,7 +48,7 @@ function ping(claim) {
   if (claim) {
     lastClaim = now;
   }
-  fetch(`${claim ? "/manifest.json" : "/robots.txt"}?welkom=${now}`, { cache: "no-store" })
+  fetch(`${claim ? "/welkom/claim" : "/welkom/sustain"}?welkom=${now}`, { cache: "no-store" })
     .then(() => refresh())
     .catch(() => {});
 }
