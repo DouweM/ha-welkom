@@ -45,6 +45,6 @@ The integration bundles a small frontend script (registered automatically) that 
 
 - A running [welkom](https://github.com/DouweM/welcome) server.
 - The role welkom assigns to your Home Assistant server must have the `api`, `home_people`, and `home_devices` features.
-- For the current-device sensor, welkom needs `activity.current_device.services` configured (typically your Home Assistant hostname).
+- For the current-device sensor, welkom needs `activity.current_device.services` configured. Recommended: count only the bundled frontend script's beacon — `GET https://<your-ha-host>/manifest.json` — since it only fires while a dashboard is actually visible. Broad host patterns also count background traffic (camera streams, auto-refreshing cards, companion-app polling), which lets idle devices claim the current device.
 
 The integration polls welkom every 30 seconds.
