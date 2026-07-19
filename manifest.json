@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/DouweM/ha-welkom/issues",
   "quality_scale": "bronze",
   "requirements": ["pydantic>=2"],
-  "version": "0.5.1"
+  "version": "0.5.2"
 }

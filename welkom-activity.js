@@ -29,6 +29,7 @@ const PING_INTERVAL = 60000; // sustain cadence; keeps welkom's ttl alive while 
 const CLAIM_GAP = 20000; // min gap between claims while interacting (matches welkom's write throttle)
 const INTERACTION_WINDOW = 70000; // input within this window makes the next ping a claim
 const TICK_INTERVAL = 5000;
+const SUSTAIN_FRAMES = 5; // frames a sustain needs within SUSTAIN_FRAMES * 100ms (>= 10fps)
 // No "scroll": it also fires for programmatic scrolls (live cards adjusting
 // layout), which would count as interaction on an untouched screen. Human
 // scrolling is covered by wheel, touchstart, and pointer events.
@@ -54,13 +55,31 @@ function tick() {
   // The callback stays queued while nothing is painted and runs when
   // rendering resumes — so pings fire exactly while the page is on screen.
   requestAnimationFrame(() => {
-    pending = false;
     const now = Date.now();
     const interactive = now - lastInteraction < INTERACTION_WINDOW;
     if (interactive && now - lastClaim >= CLAIM_GAP) {
+      pending = false;
       ping(true);
     } else if (!interactive && now - lastPing >= PING_INTERVAL) {
-      ping(false);
+      // Sustains additionally require display-rate rendering: occluded and
+      // screen-off webviews may keep a *throttled* rAF alive, but only a
+      // genuinely displayed page delivers a quick burst of frames.
+      const start = performance.now();
+      let frames = 0;
+      const step = () => {
+        frames += 1;
+        if (frames >= SUSTAIN_FRAMES) {
+          pending = false;
+          if (performance.now() - start < SUSTAIN_FRAMES * 100) {
+            ping(false);
+          }
+          return;
+        }
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    } else {
+      pending = false;
     }
   });
 }
