@@ -29,7 +29,10 @@ const PING_INTERVAL = 60000; // sustain cadence; keeps welkom's ttl alive while 
 const CLAIM_GAP = 20000; // min gap between claims while interacting (matches welkom's write throttle)
 const INTERACTION_WINDOW = 70000; // input within this window makes the next ping a claim
 const TICK_INTERVAL = 5000;
-const INTERACTION_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "scroll"];
+// No "scroll": it also fires for programmatic scrolls (live cards adjusting
+// layout), which would count as interaction on an untouched screen. Human
+// scrolling is covered by wheel, touchstart, and pointer events.
+const INTERACTION_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"];
 
 let lastInteraction = 0;
 let lastPing = 0;
