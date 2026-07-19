@@ -4,3 +4,26 @@ refresh:
     Refresh all Welkom coordinators immediately instead of waiting for the next
     poll. Called by the bundled frontend script after it registers activity for
     the viewing device.
+
+set_device_suspended:
+  name: Set device suspended
+  description: >-
+    Suspend or unsuspend a device's welkom current-device activity. While
+    suspended, the device's claims and sustains are ignored and any slot it
+    holds is released. Wire this to real-world device state — e.g. suspend a
+    Mac when its companion app's Active sensor turns off — so a device that
+    keeps rendering dashboards while nobody is at it can't hold the slot.
+  fields:
+    device:
+      name: Device
+      description: The welkom device display name (e.g. "Douwe's MBP").
+      required: true
+      example: "Douwe's MBP"
+      selector:
+        text:
+    suspended:
+      name: Suspended
+      description: Whether the device should be suspended (defaults to true).
+      default: true
+      selector:
+        boolean:

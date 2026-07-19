@@ -1,4 +1,5 @@
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 from pydantic import BaseModel
@@ -90,6 +91,19 @@ class WelkomClient(BaseModel):
             ConnectedPerson.model_validate(connected_person)
             for connected_person in raw_connected_people
         ]
+
+    @property
+    async def suspended_devices(self) -> set[str]:
+        """Names of devices barred from claiming/sustaining the current-device slot."""
+        raw = await self.request(f"{self.url}/api/devices/suspended")
+        return {str(device) for device in raw}
+
+    async def set_device_suspended(self, device: str, suspended: bool) -> None:
+        """Suspend or unsuspend a device's current-device activity."""
+        await self.session.put(
+            f"{self.url}/api/devices/{quote(device, safe='')}/suspended",
+            json={"suspended": suspended},
+        )
 
     @property
     def unique_id(self) -> str:

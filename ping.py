@@ -71,6 +71,10 @@ class WelkomPingView(HomeAssistantView):
             if data is None:
                 continue
 
+            # Welkom ignores this ping too; don't apply what won't stick.
+            if coordinator.data and device in coordinator.data.suspended_devices:
+                continue
+
             current = data.activity
             if sustain and current and current.device != device:
                 continue  # sustains never steal

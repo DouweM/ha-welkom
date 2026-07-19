@@ -96,6 +96,9 @@ class WelkomData(BaseModel):
     people: dict[str, PersonData] = {}
     unknown_people: list[PersonData] = []
     devices: dict[str, DeviceData] = {}
+    suspended_devices: set[str] = set()
+    """Devices barred from the current-device slot (e.g. asleep per their
+    companion app); beacon pings from them are not applied."""
 
 
 class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
@@ -219,9 +222,10 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # `coordinator.people` and add entities for any new ids.
         self.people = await self.client.fetch_people()
 
-        conns, connections = await asyncio.gather(
+        conns, connections, suspended = await asyncio.gather(
             self.client.connected_people,
             self.client.connections,
+            self._suspended_devices(),
         )
 
         homes: dict[str, HomeData] = defaultdict(HomeData)
@@ -290,7 +294,16 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             people=people,
             unknown_people=unknown_people,
             devices=self._device_data(connections),
+            suspended_devices=suspended,
         )
+
+    async def _suspended_devices(self) -> set[str]:
+        """The suspended-devices set, empty when welkom predates the endpoint."""
+        try:
+            return await self.client.suspended_devices
+        except Exception:
+            _LOGGER.debug("Suspended-devices fetch failed", exc_info=True)
+            return set()
 
     @property
     def _zone_lat_longs(self) -> dict[str, tuple[float, float]]:

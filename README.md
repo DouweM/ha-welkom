@@ -26,6 +26,23 @@ Pings are scheduled through `requestAnimationFrame`, so they only fire while the
 
 There are two kinds of ping, matching welkom's `services`/`sustain` config: real input (touch, scroll, hover, keys) sends **claims**, which take the person's current-device slot from any other device; on-screen dashboards without recent input send **sustains**, which keep a claim this device already holds alive (or take a vacant slot) but never steal one. Page loads, foregrounding, and display wakes deliberately do *not* count as interaction — they happen without a human (app reloads, screen wake, window un-occlusion), and would let idle machines claim the slot. So the phone in your hand always wins, while an untouched HA window on a desk or a wall tablet stays current only when nothing else is actively used.
 
+### Device suspension
+
+Frontend gating can't catch everything: a sleeping Mac's web view may keep rendering (and even see input events) with the screen off. When Home Assistant *knows* a device isn't in use — the companion app's `Active` binary sensor is `off` — align welkom with reality via the `welkom.set_device_suspended` service. While suspended, welkom ignores the device's claims and sustains and releases any slot it holds, whatever its traffic looks like:
+
+```yaml
+automation:
+  - alias: "Welkom: suspend sleeping MacBook"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.douwe_s_macbook_pro_active
+    actions:
+      - action: welkom.set_device_suspended
+        data:
+          device: "Douwe's MBP"
+          suspended: "{{ trigger.to_state.state != 'on' }}"
+```
+
 ### In automations and templates
 
 ```yaml

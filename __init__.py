@@ -46,6 +46,25 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
 
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
 
+    async def _handle_set_device_suspended(call: ServiceCall) -> None:
+        """Suspend/unsuspend a device's current-device activity in welkom.
+
+        Wire this to real-world device state — e.g. suspend the MacBook when
+        its companion app's Active sensor turns off — so a device that keeps
+        rendering dashboards while nobody is at it can't hold the slot.
+        """
+        device = call.data["device"]
+        suspended = call.data.get("suspended", True)
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if isinstance(coordinator, WelkomCoordinator):
+                await coordinator.client.set_device_suspended(device, suspended)
+                await coordinator.async_request_refresh()
+
+    hass.services.async_register(
+        DOMAIN, "set_device_suspended", _handle_set_device_suspended
+    )
+
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
