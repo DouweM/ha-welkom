@@ -87,11 +87,7 @@ class WelkomPingView(HomeAssistantView):
             conn = device_data.connection if device_data else None
             if device_data and network_id:
                 conn = next(
-                    (
-                        c
-                        for c in device_data.connections
-                        if c.network.id == network_id
-                    ),
+                    (c for c in device_data.connections if c.network.id == network_id),
                     conn,
                 )
             metadata = (
