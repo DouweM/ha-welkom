@@ -85,8 +85,14 @@ function tick() {
 }
 
 function onInteraction() {
-  lastInteraction = Date.now();
-  tick();
+  // Runs at input-event rate (up to ~120Hz while scrolling) on the UI
+  // thread, so it must stay trivially cheap: only escalate to tick() when
+  // a claim could actually be due.
+  const now = Date.now();
+  lastInteraction = now;
+  if (now - lastClaim >= CLAIM_GAP) {
+    tick();
+  }
 }
 
 for (const event of INTERACTION_EVENTS) {
