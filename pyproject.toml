@@ -1,6 +1,6 @@
 [project]
 name = "ha-welkom"
-version = "0.3.0"
+version = "0.3.1"
 description = "Welkom integration for Home Assistant"
 requires-python = ">=3.13"
 dependencies = []

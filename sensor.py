@@ -416,7 +416,13 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
             if room := (self.coordinator.rooms or {}).get(room_id):
                 attrs["room"] = room.display_name
 
-        attrs.update(activity.metadata.model_dump(exclude_unset=True))
+        # The resolver's freshness fields duplicate last_seen_at here (metadata
+        # is snapshotted at activity time); they live on the connection sensor.
+        attrs.update(
+            activity.metadata.model_dump(
+                exclude_unset=True, exclude={"last_seen", "last_roamed_at"}
+            )
+        )
 
         self._attr_extra_state_attributes = attrs
 
