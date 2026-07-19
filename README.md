@@ -22,7 +22,9 @@ Ten fixed `Unknown Person N` tracker slots cover unrecognized personal devices.
 
 The integration bundles a small frontend script (registered automatically) that keeps the current-device sensor fresh — including in the companion app's web view. While a dashboard is on screen it pings a same-origin URL once a minute, so the viewing device registers forward-auth activity with welkom, then calls the `welkom.refresh` service so the sensor updates within seconds instead of on the next 30-second poll.
 
-Pings are scheduled through `requestAnimationFrame`, so they only fire while the page is *actually being rendered*: hidden tabs, minimized or occluded windows, and sleeping or locked displays stop painting — and therefore stop pinging — even though background traffic (camera streams, auto-refreshing cards, companion-app polling) keeps flowing. No interaction is required, so passively watched displays like wall tablets stay current.
+Pings are scheduled through `requestAnimationFrame`, so they only fire while the page is *actually being rendered*: hidden tabs, minimized or occluded windows, and sleeping or locked displays stop painting — and therefore stop pinging — even though background traffic (camera streams, auto-refreshing cards, companion-app polling) keeps flowing.
+
+There are two kinds of ping, matching welkom's `services`/`sustain` config: interaction (touch, scroll, hover, keys, foregrounding) sends **claims**, which take the person's current-device slot from any other device; idle-but-on-screen dashboards send **sustains**, which keep a claim this device already holds alive (or take a vacant slot) but never steal one. So the phone in your hand always wins, while an untouched HA window on a desk or a wall tablet stays current only when nothing else is actively used.
 
 ### In automations and templates
 
@@ -47,6 +49,12 @@ Pings are scheduled through `requestAnimationFrame`, so they only fire while the
 
 - A running [welkom](https://github.com/DouweM/welcome) server.
 - The role welkom assigns to your Home Assistant server must have the `api`, `home_people`, and `home_devices` features.
-- For the current-device sensor, welkom needs `activity.current_device.services` configured. Recommended: count only the bundled frontend script's beacon — `GET https://<your-ha-host>/manifest.json` — since it only fires while a dashboard is actually visible. Broad host patterns also count background traffic (camera streams, auto-refreshing cards, companion-app polling), which lets idle devices claim the current device.
+- For the current-device sensor, welkom needs `activity.current_device` configured to count only the bundled frontend script's beacons — broad host patterns also count background traffic (camera streams, auto-refreshing cards, companion-app polling), which lets idle devices claim the current device:
+
+  ```yaml
+  current_device:
+    services: ['GET https://<your-ha-host>/manifest.json']   # interaction claims
+    sustain: ['GET https://<your-ha-host>/robots.txt']       # on-screen keeps alive
+  ```
 
 The integration polls welkom every 30 seconds.
