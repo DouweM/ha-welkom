@@ -80,7 +80,27 @@ class WelkomPingView(HomeAssistantView):
             carry = current if current and current.device == device else None
             device_data = (coordinator.data.devices or {}).get(slugify(device))
 
-            data.activity = Activity(
+            # Metadata from the connection matching the network the ping came
+            # through — a multi-connected device's primary connection can be a
+            # different network than the one actually used — with the request's
+            # own source IP as ground truth.
+            conn = device_data.connection if device_data else None
+            if device_data and network_id:
+                conn = next(
+                    (
+                        c
+                        for c in device_data.connections
+                        if c.network.id == network_id
+                    ),
+                    conn,
+                )
+            metadata = (
+                conn.metadata if conn else (carry.metadata if carry else Metadata())
+            )
+            if real_ip := headers.get("X-Real-Ip"):
+                metadata = metadata.model_copy(update={"ip": real_ip})
+
+            activity = Activity(
                 device=device,
                 device_type=(device_data.device.type if device_data else None)
                 or (carry.device_type if carry else None),
@@ -91,10 +111,18 @@ class WelkomPingView(HomeAssistantView):
                 host=request.host,
                 last_seen_at=datetime.now(UTC),
                 summary=summary or (carry.summary if carry else None),
-                metadata=(
-                    device_data.connection.metadata
-                    if device_data and device_data.connection
-                    else (carry.metadata if carry else Metadata())
-                ),
+                metadata=metadata,
             )
-            coordinator.async_update_listeners()
+            data.activity = activity
+
+            # Only wake the (coordinator-wide) entity listeners when something
+            # visible changed: notifying on every ping re-rendered every welkom
+            # entity multiple times a minute, for a timestamp bump the regular
+            # poll picks up anyway.
+            if (
+                not current
+                or current.device != activity.device
+                or current.network_id != activity.network_id
+                or current.metadata.ip != activity.metadata.ip
+            ):
+                coordinator.async_update_listeners()
