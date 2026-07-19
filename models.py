@@ -325,6 +325,7 @@ class Activity(BaseModel):
     room_id: str | None = None
     host: str
     last_seen_at: datetime
+    summary: str | None = None
     metadata: Metadata = Metadata()
 
 

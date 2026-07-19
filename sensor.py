@@ -409,6 +409,7 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
             "role_id": activity.role_id,
             "host": activity.host,
             "last_seen_at": activity.last_seen_at,
+            "connection_summary": activity.summary,
         }
 
         if room_id := activity.room_id:

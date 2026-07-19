@@ -16,10 +16,9 @@ from .const import (
     DOMAIN,
     FRONTEND_SCRIPT_URL,
     FRONTEND_SCRIPT_VERSION,
-    PING_CLAIM_URL,
-    PING_SUSTAIN_URL,
 )
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
+from .ping import WelkomPingView
 
 _PLATFORMS: list[Platform] = [
     Platform.DEVICE_TRACKER,
@@ -47,7 +46,6 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
 
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
 
-    ping_path = str(Path(__file__).parent / "welkom-ping.txt")
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
@@ -55,13 +53,12 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
                 str(Path(__file__).parent / "welkom-activity.js"),
                 cache_headers=True,
             ),
-            # Dedicated beacon endpoints: welkom's forward auth counts these
-            # (and only these) as current-device claims/sustains, so they must
-            # be paths nothing but the script ever fetches.
-            StaticPathConfig(PING_CLAIM_URL, ping_path, cache_headers=False),
-            StaticPathConfig(PING_SUSTAIN_URL, ping_path, cache_headers=False),
         ]
     )
+    # Dedicated beacon endpoints: welkom's forward auth counts these (and only
+    # these) as current-device claims/sustains, and the view applies them to
+    # the sensor instantly from the ping's own forward-auth headers.
+    hass.http.register_view(WelkomPingView(hass))
     frontend.add_extra_js_url(
         hass, f"{FRONTEND_SCRIPT_URL}?v={FRONTEND_SCRIPT_VERSION}"
     )

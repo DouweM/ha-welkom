@@ -8,7 +8,7 @@ Home Assistant integration for [welkom](https://github.com/DouweM/welcome), the 
 
 - `device_tracker.<person>` — where they are: a room of the main home, `home`, another home (`"Cabin: Kitchen"`), or `not_home`. Maps onto HA zones matching those names, so people show up on the map.
 - `binary_sensor.<person>` — presence in the main home.
-- `sensor.<person>_current_device` — the device they are *actively using* right now (e.g. `Douwe's phone`), driven by welkom's activity tracking of forward-auth requests to configured services (Home Assistant itself, typically). Expires to `unknown` after welkom's `ttl` (default 2 minutes) of inactivity. Attributes: `device_type`, `network_id`, `role_id`, `host`, `room`, `last_seen_at`, plus the connection metadata (ip, wifi ssid, user agent summary, ...).
+- `sensor.<person>_current_device` — the device they are *actively using* right now (e.g. `Douwe's phone`), driven by welkom's activity tracking of forward-auth requests to configured services (Home Assistant itself, typically). Expires to `unknown` after welkom's `ttl` (default 2 minutes) of inactivity. Attributes: `device_type`, `network_id`, `role_id`, `host`, `room`, `last_seen_at`, `connection_summary` (welkom's concise connection description), plus the connection metadata (ip, wifi ssid, user agent summary, ...).
 
 **Per device** (each known tracker/personal device, added as it connects):
 
@@ -20,11 +20,11 @@ Ten fixed `Unknown Person N` tracker slots cover unrecognized personal devices.
 
 ### Freshness
 
-The integration bundles a small frontend script (registered automatically) that keeps the current-device sensor fresh — including in the companion app's web view. While a dashboard is on screen it pings a same-origin URL once a minute, so the viewing device registers forward-auth activity with welkom, then calls the `welkom.refresh` service so the sensor updates within seconds instead of on the next 30-second poll.
+The integration bundles a small frontend script (registered automatically) that keeps the current-device sensor fresh — including in the companion app's web view. While a dashboard is on screen it pings `/welkom/claim` or `/welkom/sustain` (served by the integration itself) once a minute. The ping traverses the reverse proxy's forward auth, so it arrives carrying welkom's `X-Welcome-*` identity headers — and the integration applies those to the sensor **in the same round trip**, no poll or extra request needed; welkom records the same ping authoritatively and the regular 30-second poll reconciles.
 
 Pings are scheduled through `requestAnimationFrame`, so they only fire while the page is *actually being rendered*: hidden tabs, minimized or occluded windows, and sleeping or locked displays stop painting — and therefore stop pinging — even though background traffic (camera streams, auto-refreshing cards, companion-app polling) keeps flowing.
 
-There are two kinds of ping, matching welkom's `services`/`sustain` config: interaction (touch, scroll, hover, keys, foregrounding) sends **claims**, which take the person's current-device slot from any other device; idle-but-on-screen dashboards send **sustains**, which keep a claim this device already holds alive (or take a vacant slot) but never steal one. So the phone in your hand always wins, while an untouched HA window on a desk or a wall tablet stays current only when nothing else is actively used.
+There are two kinds of ping, matching welkom's `services`/`sustain` config: real input (touch, scroll, hover, keys) sends **claims**, which take the person's current-device slot from any other device; on-screen dashboards without recent input send **sustains**, which keep a claim this device already holds alive (or take a vacant slot) but never steal one. Page loads, foregrounding, and display wakes deliberately do *not* count as interaction — they happen without a human (app reloads, screen wake, window un-occlusion), and would let idle machines claim the slot. So the phone in your hand always wins, while an untouched HA window on a desk or a wall tablet stays current only when nothing else is actively used.
 
 ### In automations and templates
 
