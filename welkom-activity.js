@@ -38,6 +38,7 @@ const INTERACTION_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "t
 let lastInteraction = 0;
 let lastPing = 0;
 let lastClaim = 0;
+let lastEligible = 0;
 let pending = false;
 
 function ping(claim) {
@@ -71,7 +72,16 @@ function tick() {
         if (frames >= SUSTAIN_FRAMES) {
           pending = false;
           if (performance.now() - start < SUSTAIN_FRAMES * 100) {
-            ping(false);
+            // Require CONTINUOUS display-rate rendering — the previous
+            // minute-cadence check must also have passed. A screen-off
+            // webview can render in brief isolated bursts, and a single
+            // fast window shouldn't let it take a vacant slot.
+            if (now - lastEligible <= PING_INTERVAL * 2.5) {
+              ping(false);
+            }
+            lastEligible = now;
+          } else {
+            lastEligible = 0;
           }
           return;
         }
@@ -84,10 +94,12 @@ function tick() {
   });
 }
 
-function onInteraction() {
+function onInteraction(event) {
   // Runs at input-event rate (up to ~120Hz while scrolling) on the UI
   // thread, so it must stay trivially cheap: only escalate to tick() when
-  // a claim could actually be due.
+  // a claim could actually be due. Synthetic events (card libraries
+  // dispatching pointer/wheel events programmatically) don't count.
+  if (!event.isTrusted) return;
   const now = Date.now();
   lastInteraction = now;
   if (now - lastClaim >= CLAIM_GAP) {
