@@ -9,6 +9,14 @@ DOMAIN = "welkom"
 
 CONF_HOME_ID = "home_id"
 
+# Whether to create the presence entities at all. Turn off to run the
+# integration purely for auth routing — e.g. when presence is already provided
+# another way (a bridge from another HA instance) and you only want welkom here
+# for the auth provider. The coordinator still runs (auth needs each person's
+# assigned role); this only gates whether entities are published.
+CONF_CREATE_ENTITIES = "create_entities"
+DEFAULT_CREATE_ENTITIES = True
+
 FRONTEND_SCRIPT_URL = f"/{DOMAIN}/welkom-activity.js"
 FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script changes
 

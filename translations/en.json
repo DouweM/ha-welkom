@@ -34,12 +34,14 @@
                 "title": "Auth routing",
                 "description": "Log people in automatically from welkom's identity, mapping welkom people and roles to Home Assistant users.",
                 "data": {
+                    "create_entities": "Create presence entities",
                     "auth_enabled": "Enable auth routing",
                     "auth_allow_bypass_login": "Skip the login prompt",
                     "auth_require_full_role": "Only identify people at their full role",
                     "auth_default_user": "Default user"
                 },
                 "data_description": {
+                    "create_entities": "Publish welkom's presence entities (device trackers, sensors). Turn off to run this instance for auth only — e.g. when presence is already bridged from another Home Assistant.",
                     "auth_enabled": "Inject a welkom auth provider that identifies each request from welkom's forward-auth headers.",
                     "auth_allow_bypass_login": "Log matched users straight in instead of showing a login screen.",
                     "auth_require_full_role": "Recommended. Only log someone into their own account on networks that grant them their full role; on a lower-trust network they fall back to the role account, so a spoofed device can't escalate past the network's max role.",

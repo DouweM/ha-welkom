@@ -21,6 +21,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import (
     CONF_ALLOW_BYPASS_LOGIN,
     CONF_AUTH_ENABLED,
+    CONF_CREATE_ENTITIES,
     CONF_DEFAULT_USER,
     CONF_HOME_ID,
     CONF_PERSON_USERS,
@@ -28,6 +29,7 @@ from .const import (
     CONF_ROLE_USERS,
     DEFAULT_ALLOW_BYPASS_LOGIN,
     DEFAULT_AUTH_ENABLED,
+    DEFAULT_CREATE_ENTITIES,
     DEFAULT_REQUIRE_FULL_ROLE,
     DOMAIN,
 )
@@ -168,6 +170,7 @@ class WelkomOptionsFlow(OptionsFlow):
         current = self.config_entry.options
 
         if user_input is not None:
+            self._options[CONF_CREATE_ENTITIES] = user_input[CONF_CREATE_ENTITIES]
             self._options[CONF_AUTH_ENABLED] = user_input[CONF_AUTH_ENABLED]
             self._options[CONF_ALLOW_BYPASS_LOGIN] = user_input[CONF_ALLOW_BYPASS_LOGIN]
             self._options[CONF_REQUIRE_FULL_ROLE] = user_input[CONF_REQUIRE_FULL_ROLE]
@@ -176,6 +179,10 @@ class WelkomOptionsFlow(OptionsFlow):
 
         schema = vol.Schema(
             {
+                vol.Required(
+                    CONF_CREATE_ENTITIES,
+                    default=current.get(CONF_CREATE_ENTITIES, DEFAULT_CREATE_ENTITIES),
+                ): bool,
                 vol.Required(
                     CONF_AUTH_ENABLED,
                     default=current.get(CONF_AUTH_ENABLED, DEFAULT_AUTH_ENABLED),

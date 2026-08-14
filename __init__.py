@@ -20,6 +20,7 @@ from .client import WelkomClient
 from .const import (
     CONF_ALLOW_BYPASS_LOGIN,
     CONF_AUTH_ENABLED,
+    CONF_CREATE_ENTITIES,
     CONF_DEFAULT_USER,
     CONF_HOME_ID,
     CONF_PERSON_USERS,
@@ -27,6 +28,7 @@ from .const import (
     CONF_ROLE_USERS,
     DEFAULT_ALLOW_BYPASS_LOGIN,
     DEFAULT_AUTH_ENABLED,
+    DEFAULT_CREATE_ENTITIES,
     DEFAULT_REQUIRE_FULL_ROLE,
     DOMAIN,
     FRONTEND_SCRIPT_URL,
@@ -103,8 +105,6 @@ async def async_setup_entry(
 ) -> bool:
     """Set up Welkom from a config entry."""
 
-    await _async_setup_shared(hass)
-
     client = WelkomClient(
         id=config_entry.data[CONF_ID],
         url=config_entry.data[CONF_URL],
@@ -116,42 +116,58 @@ async def async_setup_entry(
 
     await coordinator.async_config_entry_first_refresh()
 
-    # TODO: Auto-create through entity?
-    device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
-        config_entry_id=config_entry.entry_id,
-        identifiers={(DOMAIN, client.unique_id)},  # TODO: connections as well?
-        manufacturer="@DouweM",
-        name=f"Welkom: {client.id}",
-        # sw_version=config.swversion,
-        # hw_version=config.hwversion,
-    )
+    # Auth routing only needs the coordinator (for each person's assigned role);
+    # the presence entities are optional (see CONF_CREATE_ENTITIES).
+    platforms = _selected_platforms(config_entry)
+    if platforms:
+        await _async_setup_shared(hass)
 
-    @callback
-    def _prune_removed_people() -> None:
-        """Remove devices for people no longer present in the configuration."""
-        current_ids = set(coordinator.people or {})
-        for device in dr.async_entries_for_config_entry(
-            device_registry, config_entry.entry_id
-        ):
-            for domain, identifier in device.identifiers:
-                if domain != DOMAIN or not identifier.startswith("person_"):
-                    continue
-                if identifier.removeprefix("person_") not in current_ids:
-                    device_registry.async_remove_device(device.id)
-                break
+        # TODO: Auto-create through entity?
+        device_registry = dr.async_get(hass)
+        device_registry.async_get_or_create(
+            config_entry_id=config_entry.entry_id,
+            identifiers={(DOMAIN, client.unique_id)},  # TODO: connections as well?
+            manufacturer="@DouweM",
+            name=f"Welkom: {client.id}",
+            # sw_version=config.swversion,
+            # hw_version=config.hwversion,
+        )
 
-    _prune_removed_people()
-    config_entry.async_on_unload(coordinator.async_add_listener(_prune_removed_people))
+        @callback
+        def _prune_removed_people() -> None:
+            """Remove devices for people no longer present in the configuration."""
+            current_ids = set(coordinator.people or {})
+            for device in dr.async_entries_for_config_entry(
+                device_registry, config_entry.entry_id
+            ):
+                for domain, identifier in device.identifiers:
+                    if domain != DOMAIN or not identifier.startswith("person_"):
+                        continue
+                    if identifier.removeprefix("person_") not in current_ids:
+                        device_registry.async_remove_device(device.id)
+                    break
+
+        _prune_removed_people()
+        config_entry.async_on_unload(
+            coordinator.async_add_listener(_prune_removed_people)
+        )
+
+        await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     await _async_setup_auth(hass, config_entry)
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_options_updated)
     )
 
-    await hass.config_entries.async_forward_entry_setups(config_entry, _PLATFORMS)
-
     return True
+
+
+@callback
+def _selected_platforms(config_entry: WelkomConfigEntry) -> list[Platform]:
+    """The entity platforms to set up: all of them, or none in auth-only mode."""
+    if config_entry.options.get(CONF_CREATE_ENTITIES, DEFAULT_CREATE_ENTITIES):
+        return list(_PLATFORMS)
+    return []
 
 
 def _auth_config(config_entry: WelkomConfigEntry) -> dict[str, Any]:
@@ -191,12 +207,19 @@ async def _async_setup_auth(
 async def _async_options_updated(
     hass: HomeAssistant, config_entry: WelkomConfigEntry
 ) -> None:
-    """Apply option changes (incl. the person/role -> user map) live."""
-    await _async_setup_auth(hass, config_entry)
+    """Apply option changes.
+
+    Reload so entity-platform changes take effect; the reload re-runs
+    ``_async_setup_auth``, which also picks up the new person/role -> user map.
+    """
+    await hass.config_entries.async_reload(config_entry.entry_id)
 
 
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: WelkomConfigEntry
 ) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(config_entry, _PLATFORMS)
+    platforms = _selected_platforms(config_entry)
+    if platforms:
+        return await hass.config_entries.async_unload_platforms(config_entry, platforms)
+    return True
