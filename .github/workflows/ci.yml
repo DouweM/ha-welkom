@@ -37,6 +37,19 @@ jobs:
       - name: Run pyright
         run: uv run pyright
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync
+      - name: Check auth resolution
+        run: uv run python tests/check_resolution.py
+
   # hassfest manifest/translation validation is omitted because hacs.json sets
   # content_in_root, so the integration dir is the repo root ("ha-welkom") and
   # hassfest rejects it for not matching the domain ("welkom"). Move the files

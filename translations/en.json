@@ -27,5 +27,33 @@
                 }
             }
         }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Auth routing",
+                "description": "Log people in automatically from welkom's identity, mapping welkom people and roles to Home Assistant users.",
+                "data": {
+                    "auth_enabled": "Enable auth routing",
+                    "auth_allow_bypass_login": "Skip the login prompt",
+                    "auth_require_full_role": "Only identify people at their full role",
+                    "auth_default_user": "Default user"
+                },
+                "data_description": {
+                    "auth_enabled": "Inject a welkom auth provider that identifies each request from welkom's forward-auth headers.",
+                    "auth_allow_bypass_login": "Log matched users straight in instead of showing a login screen.",
+                    "auth_require_full_role": "Recommended. Only log someone into their own account on networks that grant them their full role; on a lower-trust network they fall back to the role account, so a spoofed device can't escalate past the network's max role.",
+                    "auth_default_user": "Fallback Home Assistant user when neither the person nor the role maps to one."
+                }
+            },
+            "people": {
+                "title": "People → Home Assistant users",
+                "description": "The Home Assistant user each welkom person is logged in as. Leave on “fall back to role” to use the role mapping instead."
+            },
+            "roles": {
+                "title": "Roles → Home Assistant users",
+                "description": "The shared account each welkom role is logged in as when the person isn't mapped. Leave on “use default” to use the default user."
+            }
+        }
     }
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
@@ -10,9 +11,23 @@ from homeassistant.const import CONF_ID, CONF_URL, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import device_registry as dr
 
+from .auth import (
+    DATA_AUTH_INJECTED,
+    async_setup_welkom_auth,
+    async_update_welkom_auth,
+)
 from .client import WelkomClient
 from .const import (
+    CONF_ALLOW_BYPASS_LOGIN,
+    CONF_AUTH_ENABLED,
+    CONF_DEFAULT_USER,
     CONF_HOME_ID,
+    CONF_PERSON_USERS,
+    CONF_REQUIRE_FULL_ROLE,
+    CONF_ROLE_USERS,
+    DEFAULT_ALLOW_BYPASS_LOGIN,
+    DEFAULT_AUTH_ENABLED,
+    DEFAULT_REQUIRE_FULL_ROLE,
     DOMAIN,
     FRONTEND_SCRIPT_URL,
     FRONTEND_SCRIPT_VERSION,
@@ -129,9 +144,55 @@ async def async_setup_entry(
     _prune_removed_people()
     config_entry.async_on_unload(coordinator.async_add_listener(_prune_removed_people))
 
+    await _async_setup_auth(hass, config_entry)
+    config_entry.async_on_unload(
+        config_entry.add_update_listener(_async_options_updated)
+    )
+
     await hass.config_entries.async_forward_entry_setups(config_entry, _PLATFORMS)
 
     return True
+
+
+def _auth_config(config_entry: WelkomConfigEntry) -> dict[str, Any]:
+    """Build the auth-routing config dict from the entry's options."""
+    options = config_entry.options
+    return {
+        CONF_AUTH_ENABLED: options.get(CONF_AUTH_ENABLED, DEFAULT_AUTH_ENABLED),
+        CONF_ALLOW_BYPASS_LOGIN: options.get(
+            CONF_ALLOW_BYPASS_LOGIN, DEFAULT_ALLOW_BYPASS_LOGIN
+        ),
+        CONF_REQUIRE_FULL_ROLE: options.get(
+            CONF_REQUIRE_FULL_ROLE, DEFAULT_REQUIRE_FULL_ROLE
+        ),
+        CONF_PERSON_USERS: dict(options.get(CONF_PERSON_USERS, {})),
+        CONF_ROLE_USERS: dict(options.get(CONF_ROLE_USERS, {})),
+        CONF_DEFAULT_USER: options.get(CONF_DEFAULT_USER, ""),
+    }
+
+
+async def _async_setup_auth(
+    hass: HomeAssistant, config_entry: WelkomConfigEntry
+) -> None:
+    """Set up (or refresh) welkom auth routing from the entry's options.
+
+    The provider is injected the first time routing is enabled and then stays;
+    disabling it again takes full effect on the next restart, but is inert in
+    the meantime (an unmapped request falls through to HA's other providers).
+    """
+    config = _auth_config(config_entry)
+    injected = hass.data.get(DOMAIN, {}).get(DATA_AUTH_INJECTED)
+    if config[CONF_AUTH_ENABLED] and not injected:
+        await async_setup_welkom_auth(hass, config)
+    else:
+        async_update_welkom_auth(hass, config)
+
+
+async def _async_options_updated(
+    hass: HomeAssistant, config_entry: WelkomConfigEntry
+) -> None:
+    """Apply option changes (incl. the person/role -> user map) live."""
+    await _async_setup_auth(hass, config_entry)
 
 
 async def async_unload_entry(

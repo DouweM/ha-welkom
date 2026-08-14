@@ -77,3 +77,48 @@ automation:
   The `/welkom/claim` and `/welkom/sustain` endpoints are served by this integration; only the bundled script ever fetches them. (Natural frontend URLs like `/manifest.json` are also fetched by companion apps in the background, which would make idle devices look interactive.)
 
 The integration polls welkom every 30 seconds.
+
+## Auth routing
+
+Because every request into the homelab already carries welkom's identity as
+`X-Welcome-*` headers, Home Assistant can log people in as themselves without a
+password prompt. Enable **auth routing** in the integration's options and map
+welkom people and roles to Home Assistant users:
+
+1. Settings → Devices & services → **Welkom** → **Configure**.
+2. Turn on *Enable auth routing*, pick a *Default user*, then map each welkom
+   **person** and **role** to a Home Assistant user.
+
+Each request resolves in order: the person's mapped user → the role's mapped
+user → the default user. So a recognized person logs into their own account, an
+unrecognized person on a known network logs into the shared account for their
+role, and anyone else lands on the default — nobody gets bounced to a login
+loop. The Home Assistant users must already exist; auth routing never creates
+them. (Role targets are best pointed at *shared* accounts — a downgraded person,
+see below, falls back to one.)
+
+### Not identifying people on low-trust networks
+
+welkom identifies people partly from device MAC addresses, which can be spoofed
+on a network you can already join. To stop that from escalating privilege,
+*Only identify people at their full role* (on by default) honors the person map
+only when the request's role equals the person's **assigned** role in welkom —
+i.e. only on a network whose `max` role grants them their full role. On a
+lower-trust network welkom caps the role below the person's assigned role, the
+person is treated as un-trusted there, and resolution falls back to the role
+account.
+
+So someone assigned `admin` is auto-logged into their own (owner) account only
+from a network trusted to `admin` (e.g. Tailscale, where identity is a
+cryptographic node, not a MAC) — never from a residents/guest VLAN capped at a
+lower role, where a spoofed MAC would otherwise impersonate them. The assigned
+role is read from welkom's `/api/people` (via the coordinator), not from a
+request header, so no forge-able input decides trust; if it can't be determined
+the person is treated as un-trusted (fail closed).
+
+How it works: enabling the option injects a Home Assistant auth provider that
+reads the welkom headers and resolves the mapped user. Home Assistant only
+trusts those headers from a configured `http.trusted_proxies` address, so the
+reverse proxy (and only it) can assert identity — a request that reaches Home
+Assistant directly falls through to normal login. Mapping changes take effect
+immediately; toggling the feature *off* fully takes effect on the next restart.

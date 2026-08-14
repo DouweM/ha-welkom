@@ -75,6 +75,11 @@ class Person(BaseModel):
 
     avatar_url: str | None
 
+    # Welkom's *assigned* (uncapped) role for this person, from /api/people.
+    # Auth routing compares it against the request's capped role to decide
+    # whether to trust person-based identity (see auth.py).
+    role_id: str | None = None
+
     class Attrs(BaseModel):
         phone: str | None = None
         email: str | None = None
