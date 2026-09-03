@@ -79,18 +79,24 @@ class WelkomClient(BaseModel):
             self._roles = [Role.model_validate(role) for role in raw_roles]
         return self._roles
 
-    @property
-    async def connections(self) -> list[Connection]:
-        raw_connections = await self.request(f"{self.url}/api/homes/connections")
+    # Scoped to one home rather than the `/api/homes/...` aggregates: welkom
+    # answers 503 when a home's network resolver can't see its network, and the
+    # aggregate returns a flat list with no way to say "all of it except that
+    # one home". A travel router with a broken API would take the whole house's
+    # presence down with it. Per home, each failure stays where it belongs.
+    async def connections(self, home_id: str) -> list[Connection]:
+        raw_connections = await self.request(f"{self.home_url(home_id)}/connections")
         return [Connection.model_validate(connection) for connection in raw_connections]
 
-    @property
-    async def connected_people(self) -> list[ConnectedPerson]:
-        raw_connected_people = await self.request(f"{self.url}/api/homes/people")
+    async def connected_people(self, home_id: str) -> list[ConnectedPerson]:
+        raw_connected_people = await self.request(f"{self.home_url(home_id)}/people")
         return [
             ConnectedPerson.model_validate(connected_person)
             for connected_person in raw_connected_people
         ]
+
+    def home_url(self, home_id: str) -> str:
+        return f"{self.url}/api/homes/{quote(home_id, safe='')}"
 
     @property
     async def suspended_devices(self) -> set[str]:
