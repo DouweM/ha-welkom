@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any, cast
 
+import aiohttp
 from pydantic import BaseModel
 
 from homeassistant.components.zone import ZONE_ENTITY_IDS
@@ -15,7 +16,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import slugify
 
 from .client import WelkomClient
@@ -217,6 +218,16 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         return devices
 
     async def _async_update_data(self):
+        try:
+            return await self._fetch_data()
+        except aiohttp.ClientError as err:
+            # Welkom answers 503 when its network resolver can't see the
+            # network. Treating that as an update failure keeps every entity on
+            # its last known state; letting it through as an empty response
+            # would publish an empty house for one poll and then fill back in.
+            raise UpdateFailed(f"Error talking to welkom: {err}") from err
+
+    async def _fetch_data(self) -> WelkomData:
         # Refresh the configured people so newly-added people are picked up
         # without a full integration reload. The platforms read
         # `coordinator.people` and add entities for any new ids.
