@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any, cast
 
+import aiohttp
 from pydantic import BaseModel
 
 from homeassistant.components.zone import ZONE_ENTITY_IDS
@@ -15,7 +16,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import slugify
 
 from .client import WelkomClient
@@ -124,6 +125,11 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             always_update=False,
         )
         self.client = client
+        # Last good fetch per home, so a home that goes dark keeps its entities
+        # populated while the others carry on updating.
+        self._last_by_home: dict[
+            str, tuple[list[ConnectedPerson], list[Connection]]
+        ] = {}
 
     async def _async_setup(self):
         async with asyncio.timeout(10):
@@ -217,14 +223,76 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         return devices
 
     async def _async_update_data(self):
+        try:
+            return await self._fetch_data()
+        except aiohttp.ClientError as err:
+            # Welkom answers 503 when its network resolver can't see the
+            # network, rather than an empty list that would read as "nobody is
+            # home". Our entities go `unavailable` for the cycle — which is the
+            # honest reading of "we can't see" — and HA's `person` component
+            # ignores unavailable trackers, so `person.*` holds its last state
+            # instead of everyone appearing to leave at once.
+            raise UpdateFailed(f"Error talking to welkom: {err}") from err
+
+    async def _fetch_home(
+        self, home_id: str
+    ) -> tuple[list[ConnectedPerson], list[Connection]]:
+        conns, connections = await asyncio.gather(
+            self.client.connected_people(home_id),
+            self.client.connections(home_id),
+        )
+        return conns, connections
+
+    async def _fetch_homes(self) -> tuple[list[ConnectedPerson], list[Connection]]:
+        """Fetch every home, letting one unreachable home fail on its own.
+
+        Welkom answers 503 for a home whose network resolver can't see its
+        network. That's the signal we want for *this* home — it's what keeps a
+        UniFi outage from publishing an empty house — but a second home going
+        dark (a travel router with a broken API, say) must not blank the home
+        the user actually lives in. Only this instance's own home is fatal;
+        others keep whatever we last saw.
+        """
+        main_home_id = self.home.id
+        home_ids = list(self.homes or {})
+        results = await asyncio.gather(
+            *(self._fetch_home(home_id) for home_id in home_ids),
+            return_exceptions=True,
+        )
+
+        conns: list[ConnectedPerson] = []
+        connections: list[Connection] = []
+        for home_id, result in zip(home_ids, results, strict=True):
+            if isinstance(result, BaseException):
+                if home_id == main_home_id:
+                    raise result
+
+                _LOGGER.warning(
+                    "Welkom home %s is unavailable, keeping its last known state: %s",
+                    home_id,
+                    result,
+                )
+                previous = self._last_by_home.get(home_id)
+                if previous is None:
+                    continue
+                result = previous
+            else:
+                self._last_by_home[home_id] = result
+
+            home_conns, home_connections = result
+            conns.extend(home_conns)
+            connections.extend(home_connections)
+
+        return conns, connections
+
+    async def _fetch_data(self) -> WelkomData:
         # Refresh the configured people so newly-added people are picked up
         # without a full integration reload. The platforms read
         # `coordinator.people` and add entities for any new ids.
         self.people = await self.client.fetch_people()
 
-        conns, connections, suspended = await asyncio.gather(
-            self.client.connected_people,
-            self.client.connections,
+        (conns, connections), suspended = await asyncio.gather(
+            self._fetch_homes(),
             self._suspended_devices(),
         )
 
