@@ -61,6 +61,42 @@ AUTH_SCRIPT_URL = f"/{DOMAIN}/store-token.js"
 AUTH_SCRIPT_VERSION = 1
 
 
+def person_trust(
+    config: Mapping[str, Any],
+    headers: Mapping[str, str],
+    assigned_role: str | None,
+    people_known: bool,
+) -> bool | None:
+    """Whether a request's person identity may unlock that person's own account.
+
+    True unless ``require_full_role`` is set and the network downgraded the
+    person below their assigned role (capped role != assigned role), in which
+    case the MAC-derived identity isn't trustworthy here.
+
+    ``None`` means the question cannot be answered, because welkom's people were
+    never loaded. That is deliberately distinct from False: False sends the
+    request on to the role map, which is only "closed" if the role account is
+    the less privileged of the two — and it needn't be. Someone whose person
+    account is a plain user and whose role maps to an admin one would be handed
+    the admin account by an outage. Callers must decline to identify instead.
+
+    Kept here, free of Home Assistant imports, like ``resolve_mapped_user_id``,
+    so it can be unit-tested in isolation.
+    """
+    if not config.get(CONF_REQUIRE_FULL_ROLE, True):
+        return True
+
+    person = (headers.get(WELKOM_FIELD_HEADERS["person"]) or "").strip()
+    if not person:
+        return True  # no person to gate; the role/default path decides
+
+    if assigned_role is None and not people_known:
+        return None
+
+    capped_role = (headers.get(WELKOM_FIELD_HEADERS["role"]) or "").strip()
+    return assigned_role is not None and assigned_role == capped_role
+
+
 def resolve_mapped_user_id(
     config: Mapping[str, Any],
     headers: Mapping[str, str],
