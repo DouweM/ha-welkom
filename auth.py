@@ -57,9 +57,9 @@ from .const import (
     AUTH_SCRIPT_VERSION,
     CONF_ALLOW_BYPASS_LOGIN,
     CONF_AUTH_ENABLED,
-    CONF_REQUIRE_FULL_ROLE,
     DOMAIN,
     WELKOM_FIELD_HEADERS,
+    person_trust,
     resolve_mapped_user_id,
 )
 
@@ -88,6 +88,19 @@ class WelkomAuthProvider(AuthProvider):
         """Header-derived identity does not support MFA."""
         return False
 
+    def _people_loaded(self) -> bool:
+        """Whether any entry has actually fetched welkom's people.
+
+        `runtime_data` is assigned before the coordinator's first refresh, so a
+        setup that failed — welkom unreachable during an options reload, say —
+        leaves a coordinator in place with `people` still None. That is not the
+        same as "this person is unknown", and the two must not be conflated.
+        """
+        return any(
+            getattr(getattr(entry, "runtime_data", None), "people", None) is not None
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+        )
+
     def _assigned_role(self, person_id: str) -> str | None:
         """The person's uncapped assigned role, from the welkom coordinator.
 
@@ -102,32 +115,36 @@ class WelkomAuthProvider(AuthProvider):
                 return getattr(person, "role_id", None)
         return None
 
-    def _person_trusted(self, request: Request) -> bool:
+    def _person_trusted(self, request: Request) -> bool | None:
         """Whether the request's person identity may unlock their own account.
 
-        True unless ``require_full_role`` is set and the network downgraded the
-        person below their assigned role (capped role != assigned role), in
-        which case we can't trust the (MAC-derived) identity here. Fails closed:
-        an unknown assigned role is treated as downgraded.
+        The decision itself lives in `person_trust`; this just gathers what it
+        needs out of Home Assistant. None means "can't tell" — see there.
         """
-        if not self.config.get(CONF_REQUIRE_FULL_ROLE, True):
-            return True
-
         person_id = request.headers.get(WELKOM_FIELD_HEADERS["person"], "").strip()
-        if not person_id:
-            return True  # no person to gate; the role/default path decides
-
-        capped_role = request.headers.get(WELKOM_FIELD_HEADERS["role"], "").strip()
-        assigned_role = self._assigned_role(person_id)
-        return assigned_role is not None and assigned_role == capped_role
+        return person_trust(
+            self.config,
+            request.headers,
+            self._assigned_role(person_id) if person_id else None,
+            self._people_loaded(),
+        )
 
     def _resolve_user_id(self, request: Request | None) -> str | None:
         """Map the request's welkom fields to an HA user id, or None."""
         if not self.config.get(CONF_AUTH_ENABLED) or request is None:
             return None
-        return resolve_mapped_user_id(
-            self.config, request.headers, self._person_trusted(request)
-        )
+
+        person_trusted = self._person_trusted(request)
+        if person_trusted is None:
+            # We can't judge this identity, so we don't act on it. No account is
+            # unlocked and the normal login form takes over — the one outcome
+            # that can't hand anybody an account that isn't theirs.
+            _LOGGER.warning(
+                "Welkom people are unavailable; not auto-identifying this request"
+            )
+            return None
+
+        return resolve_mapped_user_id(self.config, request.headers, person_trusted)
 
     async def async_login_flow(self, context: dict[str, Any] | None) -> LoginFlow:
         """Return a login flow pre-resolved to the mapped user (if any)."""

@@ -212,7 +212,8 @@ class WelkomOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """One HA-user dropdown per welkom person (auto-identified login)."""
         coordinator = getattr(self.config_entry, "runtime_data", None)
-        people = list((coordinator.people or {}).values()) if coordinator else []
+        known_people = getattr(coordinator, "people", None)
+        people = list(known_people.values()) if known_people else []
         users = await self._user_labels()
         current: dict[str, str] = self.config_entry.options.get(CONF_PERSON_USERS, {})
 
@@ -233,7 +234,17 @@ class WelkomOptionsFlow(OptionsFlow):
             return await self.async_step_roles()
 
         if not self._person_keys:
-            self._options[CONF_PERSON_USERS] = {}
+            # "Welkom has no people" and "we couldn't ask welkom" both arrive
+            # here as an empty list, and only the first is a reason to clear the
+            # mapping. Clearing on the second throws away hand-built person
+            # mappings because welkom happened to be down when options opened.
+            if known_people is None:
+                _LOGGER.warning(
+                    "Welkom people are unavailable; keeping the existing person mapping"
+                )
+            self._options[CONF_PERSON_USERS] = (
+                {} if known_people is not None else current
+            )
             return await self.async_step_roles()
 
         options = {_UNMAPPED: "— fall back to role —", **users}
@@ -252,7 +263,8 @@ class WelkomOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """One HA-user dropdown per welkom role (shared fallback account)."""
         coordinator = getattr(self.config_entry, "runtime_data", None)
-        roles = list(coordinator.roles or []) if coordinator else []
+        known_roles = getattr(coordinator, "roles", None)
+        roles = list(known_roles) if known_roles else []
         users = await self._user_labels()
         current: dict[str, str] = self.config_entry.options.get(CONF_ROLE_USERS, {})
 
@@ -273,7 +285,13 @@ class WelkomOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=self._options)
 
         if not self._role_keys:
-            self._options[CONF_ROLE_USERS] = {}
+            # Same distinction as the people step: only clear when welkom
+            # actually told us there is nothing to map.
+            if known_roles is None:
+                _LOGGER.warning(
+                    "Welkom roles are unavailable; keeping the existing role mapping"
+                )
+            self._options[CONF_ROLE_USERS] = {} if known_roles is not None else current
             return self.async_create_entry(title="", data=self._options)
 
         options = {_UNMAPPED: "— use default —", **users}

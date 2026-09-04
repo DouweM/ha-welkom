@@ -130,6 +130,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         self._last_by_home: dict[
             str, tuple[list[ConnectedPerson], list[Connection]]
         ] = {}
+        # Last known suspended set, for the same reason (see _suspended_devices).
+        self._suspended: set[str] = set()
 
     async def _async_setup(self):
         async with asyncio.timeout(10):
@@ -366,12 +368,20 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         )
 
     async def _suspended_devices(self) -> set[str]:
-        """The suspended-devices set, empty when welkom predates the endpoint."""
+        """The suspended-devices set, empty when welkom predates the endpoint.
+
+        A failed fetch keeps the last known set rather than emptying it: an
+        empty set reads as "nothing is suspended", and the ping handler uses it
+        to skip beacons welkom is going to ignore anyway. Guessing "nothing"
+        there lets a sleeping device claim the current-device slot locally and
+        then diverge from welkom.
+        """
         try:
-            return await self.client.suspended_devices
+            self._suspended = await self.client.suspended_devices
         except Exception:
             _LOGGER.debug("Suspended-devices fetch failed", exc_info=True)
-            return set()
+
+        return self._suspended
 
     @property
     def _zone_lat_longs(self) -> dict[str, tuple[float, float]]:
