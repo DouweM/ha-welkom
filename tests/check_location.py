@@ -93,6 +93,28 @@ check("stale fix far away: welkom holds", holds(HOME, stale_away, MAX_AGE), True
 just_fresh = Fix(latitude=19.44, longitude=-99.19, accuracy=10, age=MAX_AGE)
 check("fix exactly max_age old still counts", holds(HOME, just_fresh, MAX_AGE), False)
 
+# --- placement_lingers: hold the room while the phone stays home -------------
+lingers = location.placement_lingers
+check(
+    "recent loss, phone inside: keep the room",
+    lingers(HOME, inside, timedelta(minutes=2), MAX_AGE),
+    True,
+)
+check(
+    "loss too long ago: let go",
+    lingers(HOME, inside, timedelta(minutes=20), MAX_AGE),
+    False,
+)
+check(
+    "phone outside: let go",
+    lingers(HOME, puente_precise, timedelta(minutes=1), MAX_AGE),
+    False,
+)
+check("no fix: let go", lingers(HOME, None, timedelta(minutes=1), MAX_AGE), False)
+check(
+    "no home zone: let go", lingers(None, inside, timedelta(minutes=1), MAX_AGE), False
+)
+
 # --- gps_tracker_entity_id: option wins, welkom attr is the fallback -----------
 resolve = const.gps_tracker_entity_id
 OPTS = {const.CONF_PERSON_GPS_TRACKERS: {"douwe": "device_tracker.douwe_s_iphone"}}

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.device_tracker import TrackerEntity
@@ -26,9 +27,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .client import WelkomClient
-from .const import DOMAIN, GPS_MAX_AGE
+from .const import DOMAIN, GPS_MAX_AGE, WELKOM_HOLD
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
-from .location import Circle, Fix, placement_holds
+from .location import Circle, Fix, placement_holds, placement_lingers
 from .models import Person
 
 
@@ -177,6 +178,10 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         # Which evidence the current state rests on: "welkom" or "gps" (only
         # meaningful when a phone is configured), None when there is none.
         self._source: str | None = None
+        # The last placement welkom confirmed, and when: kept for a while
+        # after welkom loses the person, see _async_update_attrs.
+        self._held: tuple[PersonData, datetime] | None = None
+        self._holding = False
 
         self._attr_location_accuracy = 0
         self._async_update_attrs()
@@ -280,8 +285,27 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
 
         data = self.data
         fix = self._fix()
+        now = dt_util.utcnow()
 
-        if data and placement_holds(self._home_circle(data), fix, GPS_MAX_AGE):
+        self._holding = False
+        use_welkom = data is not None and placement_holds(
+            self._home_circle(data), fix, GPS_MAX_AGE
+        )
+        if data is not None and use_welkom:
+            self._held = (data, now)
+        elif (
+            data is None
+            and self._held
+            and placement_lingers(
+                self._home_circle(self._held[0]), fix, now - self._held[1], WELKOM_HOLD
+            )
+        ):
+            # Welkom lost the person but the phone hasn't left the home: keep
+            # the room rather than dropping to a bare "home".
+            data = self._held[0]
+            self._holding = use_welkom = True
+
+        if data and use_welkom:
             self._source = "welkom"
             self._attr_state = data.state
             self._attr_latitude = data.latitude
@@ -331,9 +355,11 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         if self._gps_entity_id is not None:
             attr["gps_tracker"] = self._gps_entity_id
             attr["source"] = self._source
+            attr["held"] = self._holding
 
         # Welkom's network view only describes the state while it is the state.
-        if self._source == "welkom" and (data := self.data):
+        data = self._held[0] if self._holding and self._held else self.data
+        if self._source == "welkom" and data:
             if device := data.device:
                 attr["device_name"] = device.display_name
 

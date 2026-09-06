@@ -30,6 +30,11 @@ CONF_PERSON_GPS_TRACKERS = "person_gps_trackers"
 # of actually moving (significant-location-change), so this only bites when
 # the phone has gone quiet.
 GPS_MAX_AGE = timedelta(minutes=15)
+# How long welkom's last placement is kept after welkom stops reporting the
+# person, as long as the phone's fix stays within the home: an idle phone drops
+# off the controller's online window for a few minutes at a time without
+# anyone having moved.
+WELKOM_HOLD = timedelta(minutes=5)
 
 FRONTEND_SCRIPT_URL = f"/{DOMAIN}/welkom-activity.js"
 FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script changes

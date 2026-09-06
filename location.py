@@ -80,3 +80,23 @@ def placement_holds(home: Circle | None, fix: Fix | None, max_age: timedelta) ->
     if fix.age > max_age:
         return True
     return fix_in_circle(fix, home)
+
+
+def placement_lingers(
+    home: Circle | None, fix: Fix | None, since: timedelta, max_hold: timedelta
+) -> bool:
+    """Whether a placement welkom has *stopped* reporting is still worth keeping.
+
+    An idle phone on WiFi goes quiet for minutes at a time, and the network
+    controller ages it out before it speaks again, so welkom loses a person who
+    hasn't moved. Dropping to a bare "home" (from the phone's GPS) for those
+    minutes reads as a room change that never happened. Keep the last room
+    while the phone's fix still sits within the home and the placement is
+    recent enough (``since`` is how long ago welkom last confirmed it). Without
+    a fix, or with one outside the home, there is nothing backing the room up.
+    """
+    if home is None or fix is None:
+        return False
+    if since > max_hold:
+        return False
+    return fix_in_circle(fix, home)
