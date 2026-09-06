@@ -87,6 +87,15 @@ class Person(BaseModel):
 
         mdi_icon: str | None = None
 
+        class HomeAssistant(BaseModel):
+            """Hints for this integration, set on the person in welkom.yml."""
+
+            gps_tracker: str | None = None
+            """device_tracker carrying the person's phone GPS; the integration's
+            own option for the person overrides it."""
+
+        homeassistant: HomeAssistant = HomeAssistant()
+
     attrs: Attrs = Attrs()
 
     @computed_field

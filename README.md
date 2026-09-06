@@ -6,7 +6,7 @@ Home Assistant integration for [welkom](https://github.com/DouweM/welcome), the 
 
 **Per person** (added automatically as people appear in welkom's config):
 
-- `device_tracker.<person>` — where they are: a room of the main home, `home`, another home (`"Cabin: Kitchen"`), or `not_home`. Maps onto HA zones matching those names, so people show up on the map.
+- `device_tracker.<person>` — where they are: a room of the main home, `home`, another home (`"Cabin: Kitchen"`), or `not_home`. Maps onto HA zones matching those names (`in_zones`, coordinates), so people show up on the map and count in zones. With a phone tracker configured for the person (see [Phone GPS](#phone-gps)) it also carries the phone's position while they're out — the one tracker to link to `person.<name>`.
 - `binary_sensor.<person>` — presence in the main home.
 - `sensor.<person>_current_device` — the device they are *actively using* right now (e.g. `Douwe's phone`), driven by welkom's activity tracking of forward-auth requests to configured services (Home Assistant itself, typically). Expires to `unknown` after welkom's `ttl` (default 2 minutes) of inactivity. Attributes: `device_type`, `network_id`, `role_id`, `host`, `room`, `last_seen_at`, `connection_summary` (welkom's concise connection description), plus the connection metadata (ip, wifi ssid, user agent summary, ...).
 
@@ -17,6 +17,17 @@ Home Assistant integration for [welkom](https://github.com/DouweM/welcome), the 
 **Per home and room**: people count, known/unknown people counts, and comma-joined name lists — six sensors each, attached to devices suggested into matching HA areas.
 
 Ten fixed `Unknown Person N` tracker slots cover unrecognized personal devices.
+
+### Phone GPS
+
+Welkom only knows the network, so on its own a person is either in a room or `not_home`. Give the integration the person's phone device tracker — per person under the integration's **Configure** options, or as `attrs.homeassistant.gps_tracker: <device_tracker object id>` on the person in welkom.yml (the option wins) — and `device_tracker.<person>` becomes the merge of both:
+
+- **Home:** welkom's room, with the room zone's coordinates and `in_zones` (room, home, and whatever encloses the home).
+- **Out:** the phone's position, accuracy and zones, like any GPS tracker.
+- **At the edges, the phone wins.** Welkom keeps seeing a phone that's still associated to the garden access point from the street, and a controller takes a couple of minutes to age out a client after the person drove off; both read as "home" for a while. A *fresh* fix (under 15 minutes old) clearly outside the home's zone overrules that placement. A stale fix doesn't: the phone may be dead or left behind while its owner is home with another device.
+- **Welkom outage:** the tracker stays available, holding welkom's last placement while the phone's fix remains within the home and following the phone otherwise. (Without a phone it goes `unavailable`, so `person.*` holds its last state.)
+
+Link **only** this tracker to the Home Assistant person. Listing the phone tracker alongside it makes HA's person entity pick whichever wrote last, which is the race this merge exists to end. `binary_sensor.<person>` stays welkom's pure network view; the `source` attribute on the tracker says whether `welkom` or `gps` is speaking.
 
 ### Freshness
 

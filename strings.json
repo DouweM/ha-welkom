@@ -48,6 +48,10 @@
           "auth_default_user": "Fallback Home Assistant user when neither the person nor the role maps to one."
         }
       },
+      "locations": {
+        "title": "People → phone trackers",
+        "description": "The phone's GPS device tracker for each welkom person. The person's welkom tracker then carries the phone's position while they're out and lets a fresh fix overrule a lingering network placement, so `device_tracker.<person>` is the one tracker to link to their Home Assistant person. Leave empty to use `attrs.homeassistant.gps_tracker` from welkom, or to go without a phone."
+      },
       "people": {
         "title": "People → Home Assistant users",
         "description": "The Home Assistant user each welkom person is logged in as. Leave on “fall back to role” to use the role mapping instead."

@@ -7,7 +7,11 @@ from typing import Any, cast
 import aiohttp
 from pydantic import BaseModel
 
-from homeassistant.components.zone import ZONE_ENTITY_IDS
+from homeassistant.components.zone import (
+    DATA_ZONE_ENTITY_IDS,
+    ENTITY_ID_HOME,
+    async_get_enclosing_zones,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_LATITUDE,
@@ -15,11 +19,12 @@ from homeassistant.const import (
     STATE_HOME,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import slugify
 
 from .client import WelkomClient
+from .const import gps_tracker_entity_id
 from .models import (
     Activity,
     ConnectedPerson,
@@ -66,9 +71,18 @@ class PersonData(BaseModel):
     room: Room | None = None
 
     state: str | None = None
+    """Welkom's placement as a tracker state: a room of the main home, `home`,
+    or another home (`"Cabin"`, `"Cabin: Kitchen"`)."""
 
     latitude: float | None = None
     longitude: float | None = None
+    """The center of the most specific HA zone the placement maps onto."""
+
+    in_zones: list[str] = []
+    """HA zones the placement maps onto: the room's, the home's, and whatever
+    encloses the home — what a GPS tracker standing at that spot would report."""
+    home_zone_id: str | None = None
+    """The HA zone standing for `home`, when one exists."""
 
     activity: Activity | None = None
 
@@ -340,23 +354,13 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             if home == main_home and room:
                 self._update_area_data(rooms[room.id], conn)
 
-        zone_lat_longs = self._zone_lat_longs
-        for state, state_people in people_by_state.items():
-            try:
-                lat, lon = zone_lat_longs[state.casefold()]
-
-                # TODO: This affects locations on the map, should only be used for those actually shown?
-                # distance_between_people = 0.00003
-                # offset = (len(state_people) - 1) * (distance_between_people / 2) * -1
-
-                for person in state_people:
-                    person.latitude = lat
-                    person.longitude = lon
-
-                    # person.longitude += offset
-                    # offset += distance_between_people
-            except KeyError:
-                continue
+        zones = self._zones_by_name
+        for state_people in people_by_state.values():
+            # TODO: This affects locations on the map, should only be used for those actually shown?
+            # distance_between_people = 0.00003
+            # offset = (len(state_people) - 1) * (distance_between_people / 2) * -1
+            for person in state_people:
+                self._place(person, zones)
 
         return WelkomData(
             homes=homes,
@@ -383,23 +387,67 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
         return self._suspended
 
+    def gps_tracker(self, person_id: str) -> str | None:
+        """The device_tracker carrying this person's phone GPS, if configured."""
+        person = (self.people or {}).get(person_id)
+        options = self.config_entry.options if self.config_entry else {}
+        return gps_tracker_entity_id(
+            options,
+            person_id,
+            person.attrs.homeassistant.gps_tracker if person else None,
+        )
+
+    def _place(self, data: PersonData, zones: dict[str, State]) -> None:
+        """Map welkom's placement onto HA zones.
+
+        Coordinates put the person on the map; `in_zones` is what a GPS tracker
+        standing in that room would report, so zone counts, conditions and the
+        person entity treat welkom's placement like any other. The room's zone
+        is looked up by the full state string — a room name, or "Cabin: Kitchen"
+        for another home, so same-named rooms in different homes don't collide —
+        and the home's by its name, the main home being `zone.home`.
+        """
+        if data.home == self.home:
+            home_zone = self.hass.states.get(ENTITY_ID_HOME)
+        else:
+            home_zone = zones.get(data.home.display_name.casefold())
+        room_zone = (
+            zones.get(data.state.casefold()) if data.room and data.state else None
+        )
+
+        in_zones: list[str] = []
+        if room_zone:
+            in_zones.append(room_zone.entity_id)
+        if home_zone:
+            in_zones.append(home_zone.entity_id)
+            in_zones.extend(
+                zone_id
+                for zone_id in async_get_enclosing_zones(self.hass, home_zone.entity_id)
+                if zone_id not in in_zones
+            )
+        data.in_zones = in_zones
+        data.home_zone_id = home_zone.entity_id if home_zone else None
+
+        if anchor := room_zone or home_zone:
+            anchor_attrs = cast(dict[str, Any], anchor.attributes)
+            data.latitude = anchor_attrs.get(ATTR_LATITUDE)
+            data.longitude = anchor_attrs.get(ATTR_LONGITUDE)
+
     @property
-    def _zone_lat_longs(self) -> dict[str, tuple[float, float]]:
+    def _zones_by_name(self) -> dict[str, State]:
+        """Available zones keyed by casefolded name; the first wins on duplicates."""
         hass = self.hass
 
-        result: dict[str, tuple[float, float]] = {}
-        for zone_entity_id in hass.data.get(ZONE_ENTITY_IDS, ()):
+        result: dict[str, State] = {}
+        for zone_entity_id in hass.data.get(DATA_ZONE_ENTITY_IDS, ()):
             zone = hass.states.get(zone_entity_id)
             if not zone or zone.state == STATE_UNAVAILABLE:
                 continue
 
             zone_attrs = cast(dict[str, Any], zone.attributes)
-            lat = zone_attrs.get(ATTR_LATITUDE)
-            lon = zone_attrs.get(ATTR_LONGITUDE)
-            if not lat or not lon:
+            if not zone_attrs.get(ATTR_LATITUDE) or not zone_attrs.get(ATTR_LONGITUDE):
                 continue
 
-            zone_name = STATE_HOME if zone.entity_id == STATE_HOME else zone.name
-            result[zone_name.casefold()] = (lat, lon)
+            result.setdefault(zone.name.casefold(), zone)
 
         return result

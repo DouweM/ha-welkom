@@ -8,6 +8,7 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 
+from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
@@ -17,6 +18,7 @@ from homeassistant.const import CONF_ID, CONF_URL
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 
 from .const import (
     CONF_ALLOW_BYPASS_LOGIN,
@@ -24,6 +26,7 @@ from .const import (
     CONF_CREATE_ENTITIES,
     CONF_DEFAULT_USER,
     CONF_HOME_ID,
+    CONF_PERSON_GPS_TRACKERS,
     CONF_PERSON_USERS,
     CONF_REQUIRE_FULL_ROLE,
     CONF_ROLE_USERS,
@@ -143,7 +146,7 @@ class CannotConnect(HomeAssistantError):
 
 
 class WelkomOptionsFlow(OptionsFlow):
-    """Options: enable auth routing and map welkom people/roles to HA users."""
+    """Options: phone trackers per person, auth routing, people/roles -> HA users."""
 
     def __init__(self) -> None:
         """Initialise the accumulated options and per-step key maps."""
@@ -175,7 +178,7 @@ class WelkomOptionsFlow(OptionsFlow):
             self._options[CONF_ALLOW_BYPASS_LOGIN] = user_input[CONF_ALLOW_BYPASS_LOGIN]
             self._options[CONF_REQUIRE_FULL_ROLE] = user_input[CONF_REQUIRE_FULL_ROLE]
             self._options[CONF_DEFAULT_USER] = user_input.get(CONF_DEFAULT_USER, "")
-            return await self.async_step_people()
+            return await self.async_step_locations()
 
         schema = vol.Schema(
             {
@@ -207,22 +210,84 @@ class WelkomOptionsFlow(OptionsFlow):
         )
         return self.async_show_form(step_id="init", data_schema=schema)
 
+    def _person_labels(self) -> tuple[dict[str, str], bool]:
+        """Return {display label: welkom person id} and whether welkom answered.
+
+        Labels make the form readable; the map turns submitted keys back into
+        ids. "Welkom has no people" and "we couldn't ask welkom" both arrive as
+        an empty map — the flag tells them apart, because only the first is a
+        reason to clear an existing mapping.
+        """
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        known_people = getattr(coordinator, "people", None)
+        people = list(known_people.values()) if known_people else []
+
+        labels: dict[str, str] = {}
+        for person in people:
+            label = person.display_name
+            if label in labels:
+                label = f"{person.display_name} ({person.id})"
+            labels[label] = person.id
+        return labels, known_people is not None
+
+    async def async_step_locations(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """One phone device tracker per welkom person.
+
+        The person's welkom tracker then carries the phone's position while
+        they're out, and lets a fresh fix overrule a lingering network
+        placement — see ``device_tracker.WelkomTracker``.
+        """
+        current: dict[str, str] = self.config_entry.options.get(
+            CONF_PERSON_GPS_TRACKERS, {}
+        )
+        self._person_keys, people_known = self._person_labels()
+
+        if user_input is not None:
+            mapping = {
+                self._person_keys[label]: entity_id
+                for label, entity_id in user_input.items()
+                if label in self._person_keys and entity_id
+            }
+            self._options[CONF_PERSON_GPS_TRACKERS] = mapping
+            return await self.async_step_people()
+
+        if not self._person_keys:
+            if not people_known:
+                _LOGGER.warning(
+                    "Welkom people are unavailable; keeping the existing phone trackers"
+                )
+            self._options[CONF_PERSON_GPS_TRACKERS] = {} if people_known else current
+            return await self.async_step_people()
+
+        schema = vol.Schema(
+            {
+                vol.Optional(label): EntitySelector(
+                    EntitySelectorConfig(domain=DEVICE_TRACKER_DOMAIN)
+                )
+                for label in self._person_keys
+            }
+        )
+        return self.async_show_form(
+            step_id="locations",
+            data_schema=self.add_suggested_values_to_schema(
+                schema,
+                {
+                    label: current[person_id]
+                    for label, person_id in self._person_keys.items()
+                    if person_id in current
+                },
+            ),
+        )
+
     async def async_step_people(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """One HA-user dropdown per welkom person (auto-identified login)."""
-        coordinator = getattr(self.config_entry, "runtime_data", None)
-        known_people = getattr(coordinator, "people", None)
-        people = list(known_people.values()) if known_people else []
         users = await self._user_labels()
         current: dict[str, str] = self.config_entry.options.get(CONF_PERSON_USERS, {})
-
-        self._person_keys = {}
-        for person in people:
-            label = person.display_name
-            if label in self._person_keys:
-                label = f"{person.display_name} ({person.id})"
-            self._person_keys[label] = person.id
+        self._person_keys, people_known = self._person_labels()
 
         if user_input is not None:
             mapping = {
@@ -234,17 +299,14 @@ class WelkomOptionsFlow(OptionsFlow):
             return await self.async_step_roles()
 
         if not self._person_keys:
-            # "Welkom has no people" and "we couldn't ask welkom" both arrive
-            # here as an empty list, and only the first is a reason to clear the
-            # mapping. Clearing on the second throws away hand-built person
-            # mappings because welkom happened to be down when options opened.
-            if known_people is None:
+            # Clearing on "couldn't ask welkom" would throw away hand-built
+            # person mappings because welkom happened to be down when options
+            # opened; only clear when welkom actually said there is nobody.
+            if not people_known:
                 _LOGGER.warning(
                     "Welkom people are unavailable; keeping the existing person mapping"
                 )
-            self._options[CONF_PERSON_USERS] = (
-                {} if known_people is not None else current
-            )
+            self._options[CONF_PERSON_USERS] = {} if people_known else current
             return await self.async_step_roles()
 
         options = {_UNMAPPED: "— fall back to role —", **users}

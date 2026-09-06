@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Any
 
 DOMAIN = "welkom"
@@ -16,6 +17,19 @@ CONF_HOME_ID = "home_id"
 # assigned role); this only gates whether entities are published.
 CONF_CREATE_ENTITIES = "create_entities"
 DEFAULT_CREATE_ENTITIES = True
+
+# --- Location: welkom placement + phone GPS -----------------------------------
+# Per-person phone tracker feeding the combined `device_tracker.<person>_location`
+# entity (see device_tracker.WelkomLocationTracker). Options key holds
+# {welkom person id: device_tracker entity id}; a person's
+# `attrs.homeassistant.gps_tracker` in welkom is the fallback.
+CONF_PERSON_GPS_TRACKERS = "person_gps_trackers"
+# A phone fix older than this can't contradict welkom's placement: a phone
+# that stopped reporting may be dead or left behind, while welkom seeing the
+# person's laptop is a current fact. Fresh fixes arrive within a minute or two
+# of actually moving (significant-location-change), so this only bites when
+# the phone has gone quiet.
+GPS_MAX_AGE = timedelta(minutes=15)
 
 FRONTEND_SCRIPT_URL = f"/{DOMAIN}/welkom-activity.js"
 FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script changes
@@ -95,6 +109,23 @@ def person_trust(
 
     capped_role = (headers.get(WELKOM_FIELD_HEADERS["role"]) or "").strip()
     return assigned_role is not None and assigned_role == capped_role
+
+
+def gps_tracker_entity_id(
+    config: Mapping[str, Any], person_id: str, configured: str | None
+) -> str | None:
+    """The device_tracker entity carrying a person's phone GPS, if any.
+
+    The integration's options win; ``configured`` is welkom's own
+    ``attrs.homeassistant.gps_tracker`` on the person, the fallback, so the
+    mapping can live next to the person in welkom.yml. A bare object id
+    ("douwe_s_iphone") is taken to be a device_tracker. Kept here, free of
+    Home Assistant imports, so it can be unit-tested in isolation.
+    """
+    value = config.get(CONF_PERSON_GPS_TRACKERS, {}).get(person_id) or configured
+    if not value or not (value := value.strip()):
+        return None
+    return value if "." in value else f"device_tracker.{value}"
 
 
 def resolve_mapped_user_id(
