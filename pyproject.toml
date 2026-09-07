@@ -1,6 +1,6 @@
 [project]
 name = "ha-welkom"
-version = "0.10.1"
+version = "0.10.2"
 description = "Welkom integration for Home Assistant"
 requires-python = ">=3.13"
 dependencies = []
@@ -48,8 +48,6 @@ exclude = ["**/__pycache__", ".venv"]
 # Subclassing HA's Entity/EntityDescription with a narrowed type and setting
 # `_attr_*`/`entity_description` overrides is the documented integration
 # pattern; pyright flags these as incompatible overrides on every component.
-# HA also lazy-exports some symbols via module __getattr__, which pyright
-# cannot see statically (e.g. TrackerEntityDescription).
 reportIncompatibleVariableOverride = false
 reportIncompatibleMethodOverride = false
 reportPrivateImportUsage = false

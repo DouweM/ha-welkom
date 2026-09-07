@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from homeassistant.components.device_tracker import TrackerEntity
-from homeassistant.components.device_tracker.config_entry import (
-    TrackerEntityDescription,  # pyright: ignore[reportAttributeAccessIssue]  # lazy HA __getattr__ export
+from homeassistant.components.device_tracker import (
+    TrackerEntity,
+    TrackerEntityDescription,
 )
 from homeassistant.const import (
     ATTR_GPS_ACCURACY,
