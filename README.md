@@ -25,9 +25,12 @@ Welkom only knows the network, so on its own a person is either in a room or `no
 - **Home:** welkom's room, with the room zone's coordinates and `in_zones` (room, home, and whatever encloses the home).
 - **Out:** the phone's position, accuracy and zones, like any GPS tracker.
 - **At the edges, the phone wins.** Welkom keeps seeing a phone that's still associated to the garden access point from the street, and a controller takes a couple of minutes to age out a client after the person drove off; both read as "home" for a while. A *fresh* fix (under 15 minutes old) clearly outside the home's zone overrules that placement. A stale fix doesn't: the phone may be dead or left behind while its owner is home with another device.
+- **Brief dropouts hold the room.** An idle phone goes quiet on WiFi for minutes at a time and the controller ages it out, so welkom loses a person who hasn't moved. The tracker keeps welkom's last room for up to 5 minutes as long as the phone's fix stays within the home (`held: true` while it does), instead of dropping to a bare `home`.
 - **Welkom outage:** the tracker stays available, holding welkom's last placement while the phone's fix remains within the home and following the phone otherwise. (Without a phone it goes `unavailable`, so `person.*` holds its last state.)
 
-Link **only** this tracker to the Home Assistant person. Listing the phone tracker alongside it makes HA's person entity pick whichever wrote last, which is the race this merge exists to end. `binary_sensor.<person>` stays welkom's pure network view; the `source` attribute on the tracker says whether `welkom` or `gps` is speaking.
+Link **only** this tracker to the Home Assistant person. Listing the phone tracker alongside it makes HA's person entity pick whichever wrote last, which is the race this merge exists to end. `binary_sensor.<person>` stays welkom's pure network view; the `source` attribute on the tracker says whether `welkom` or `gps` is speaking, and `held` whether welkom's placement is being kept through a dropout.
+
+Room zones in HA are best made **passive** (a few metres around each room's spot, inside the home zone): the tracker names rooms from welkom's placement, and passive zones keep a phone's jittery GPS from ever claiming one.
 
 ### Freshness
 
