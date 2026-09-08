@@ -65,20 +65,53 @@ def fix_in_circle(fix: Fix, circle: Circle) -> bool:
     return center_distance - circle.radius < fix.accuracy
 
 
-def placement_holds(home: Circle | None, fix: Fix | None, max_age: timedelta) -> bool:
+def fix_clearly_in_circle(fix: Fix, circle: Circle) -> bool:
+    """Whether the fix lies inside the circle even at its blurriest.
+
+    The whole accuracy disc has to fit, so a fix that merely *could* be in the
+    zone doesn't count. This is the stricter half of the hysteresis: an
+    imprecise fix from down the street overlaps a house-sized zone easily, and
+    that is not enough to declare someone back home.
+    """
+    center_distance = distance(
+        fix.latitude, fix.longitude, circle.latitude, circle.longitude
+    )
+    return center_distance + fix.accuracy <= circle.radius
+
+
+def placement_holds(
+    home: Circle | None,
+    fix: Fix | None,
+    max_age: timedelta,
+    *,
+    gps_in_charge: bool = False,
+) -> bool:
     """Whether welkom's placement of a person at ``home`` survives their phone's fix.
 
-    It holds unless a *fresh* fix puts the phone clearly outside the home's
-    zone. Without a zone to check against, or without a fix, welkom is the only
-    evidence there is. A stale fix isn't evidence against welkom either: a
-    phone that hasn't reported in a while may be dead or left on a desk
-    somewhere while its owner is home with their laptop, and welkom seeing that
-    laptop is the more current fact.
+    Asymmetric on purpose, because the question changes once someone has left.
+
+    While welkom is speaking, its placement holds unless a *fresh* fix puts the
+    phone clearly outside the home's zone: a room reading is worth keeping
+    until the phone contradicts it beyond doubt.
+
+    Once the phone has taken over (``gps_in_charge``), the reverse applies —
+    welkom only gets the person back when a fresh fix is *clearly* inside the
+    home. Without that, one imprecise fix from down the street, whose accuracy
+    disc happens to graze the home zone, hands the person back to a network
+    placement that says they are standing in the hall.
+
+    Without a zone to check against, or without a fix, welkom is the only
+    evidence there is. A stale fix isn't evidence either way: a phone that
+    hasn't reported in a while may be dead or left on a desk somewhere while
+    its owner is home with their laptop, and welkom seeing that laptop is the
+    more current fact.
     """
     if home is None or fix is None:
         return True
     if fix.age > max_age:
         return True
+    if gps_in_charge:
+        return fix_clearly_in_circle(fix, home)
     return fix_in_circle(fix, home)
 
 
@@ -94,6 +127,11 @@ def placement_lingers(
     while the phone's fix still sits within the home and the placement is
     recent enough (``since`` is how long ago welkom last confirmed it). Without
     a fix, or with one outside the home, there is nothing backing the room up.
+
+    This only answers "has the phone moved since"; the caller must also know
+    that the person never *left* in between. A room resurrected after a walk
+    around the block would be a placement nobody ever observed — see
+    ``device_tracker.WelkomTracker._async_update_attrs``.
     """
     if home is None or fix is None:
         return False

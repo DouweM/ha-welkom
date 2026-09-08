@@ -93,6 +93,16 @@ check("stale fix far away: welkom holds", holds(HOME, stale_away, MAX_AGE), True
 just_fresh = Fix(latitude=19.44, longitude=-99.19, accuracy=10, age=MAX_AGE)
 check("fix exactly max_age old still counts", holds(HOME, just_fresh, MAX_AGE), False)
 
+# --- fix_clearly_in_circle: the whole accuracy disc has to fit ----------------
+clearly = location.fix_clearly_in_circle
+check("precise fix in a bedroom is clearly in home", clearly(inside, HOME), True)
+check("blurry fix grazing home is not clearly in", clearly(puente_blurry, HOME), False)
+check(
+    "77m out with 25m accuracy is not clearly in",
+    clearly(Fix(latitude=19.41864, longitude=-99.20544, accuracy=25), HOME),
+    False,
+)
+
 # --- placement_lingers: hold the room while the phone stays home -------------
 lingers = location.placement_lingers
 check(
@@ -113,6 +123,52 @@ check(
 check("no fix: let go", lingers(HOME, None, timedelta(minutes=1), MAX_AGE), False)
 check(
     "no home zone: let go", lingers(None, inside, timedelta(minutes=1), MAX_AGE), False
+)
+
+
+# --- hysteresis: tonight's walk to the Puente, replayed -----------------------
+# Distances/accuracies as recorded 2026-09-07 18:24-18:30 CDMX, when a blurry
+# fix on the way out (and another on the way back) briefly put the person in
+# the Hall, 3 m from the house, while they were most of a block away.
+def fix_at(metres: float, accuracy: float, age: timedelta = timedelta(0)) -> object:
+    """A fix `metres` due south of the house, blurred by `accuracy`."""
+    return Fix(
+        latitude=HOME.latitude - metres / 111_000,
+        longitude=HOME.longitude,
+        accuracy=accuracy,
+        age=age,
+    )
+
+
+leaving = fix_at(90, 35)
+check("90m/35m breaks welkom's placement", holds(HOME, leaving, MAX_AGE), False)
+blurry_out = fix_at(79, 29)
+check(
+    "79m/29m used to hand the person back (the jump)",
+    holds(HOME, blurry_out, MAX_AGE),
+    True,
+)
+check(
+    "79m/29m no longer does, once gps is in charge",
+    holds(HOME, blurry_out, MAX_AGE, gps_in_charge=True),
+    False,
+)
+returning_blurry = fix_at(71, 50)
+check(
+    "71m/50m on the way back stays gps",
+    holds(HOME, returning_blurry, MAX_AGE, gps_in_charge=True),
+    False,
+)
+back_inside = fix_at(22, 17)
+check(
+    "22m/17m hands the person back to welkom",
+    holds(HOME, back_inside, MAX_AGE, gps_in_charge=True),
+    True,
+)
+check(
+    "a phone that went quiet hands back either way",
+    holds(HOME, fix_at(5000, 10, age=timedelta(hours=1)), MAX_AGE, gps_in_charge=True),
+    True,
 )
 
 # --- gps_tracker_entity_id: option wins, welkom attr is the fallback -----------

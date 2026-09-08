@@ -147,7 +147,8 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
     on the person in welkom), the phone's GPS fills in the rest — their
     position while they're out — and gets the final word at the edges: a fresh
     fix clearly outside the home overrules a placement welkom is still holding
-    from a lingering WiFi association (see ``location.placement_holds``). That
+    from a lingering WiFi association, and once it has, welkom only gets them
+    back on a fix clearly *inside* the home (see ``location.placement_holds``). That
     makes this the one tracker to link to ``person.<name>``, instead of a
     welkom tracker and a phone tracker racing each other in the person
     entity's "latest write wins" merge.
@@ -286,15 +287,22 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         data = self.data
         fix = self._fix()
         now = dt_util.utcnow()
+        # Which side spoke last, so the handover needs real evidence in both
+        # directions instead of flipping on whichever fix landed most recently.
+        gps_in_charge = self._source == "gps"
 
         self._holding = False
         use_welkom = data is not None and placement_holds(
-            self._home_circle(data), fix, GPS_MAX_AGE
+            self._home_circle(data), fix, GPS_MAX_AGE, gps_in_charge=gps_in_charge
         )
         if data is not None and use_welkom:
             self._held = (data, now)
         elif (
             data is None
+            # A room may only be resurrected if the person never left in the
+            # meantime. Once the phone has taken charge they demonstrably did,
+            # and welkom's last room is a place nobody was ever seen.
+            and not gps_in_charge
             and self._held
             and placement_lingers(
                 self._home_circle(self._held[0]), fix, now - self._held[1], WELKOM_HOLD
@@ -316,6 +324,8 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             # Position from the phone; zones and state follow from it, the way
             # they do for any GPS tracker.
             self._source = "gps"
+            # Nothing from before the walk describes where they are now.
+            self._held = None
             self._attr_state = None
             self._attr_latitude = fix.latitude
             self._attr_longitude = fix.longitude
