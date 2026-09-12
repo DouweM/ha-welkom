@@ -313,6 +313,18 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             data = self._held[0]
             self._holding = use_welkom = True
 
+        # Tell the coordinator which evidence won, so it can follow the trip:
+        # a journey starts when the phone takes over and ends when welkom gets
+        # them back, and this is the only place that knows which.
+        if self._gps_entity_id is not None and isinstance(
+            self.coordinator_context, str
+        ):
+            self.coordinator.observe(
+                self.coordinator_context,
+                None if (data and use_welkom) else fix,
+                now,
+            )
+
         if data and use_welkom:
             self._source = "welkom"
             self._attr_state = data.state

@@ -19,12 +19,22 @@ from homeassistant.const import (
     STATE_HOME,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import slugify
 
 from .client import WelkomClient
-from .const import gps_tracker_entity_id
+from .const import (
+    TRIP_AWAY_FLOOR,
+    TRIP_COARSE_ZONE,
+    TRIP_DWELL,
+    TRIP_PLACE_RADIUS,
+    TRIP_SETTLE_RADIUS,
+    TRIP_STILL_SPEED,
+    gps_tracker_entity_id,
+)
+from .location import Circle, Fix, distance
 from .models import (
     Activity,
     ConnectedPerson,
@@ -35,6 +45,7 @@ from .models import (
     Role,
     Room,
 )
+from .trip import Trip, follow
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -146,8 +157,19 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         ] = {}
         # Last known suspended set, for the same reason (see _suspended_devices).
         self._suspended: set[str] = set()
+        # Where each person who is out has got to, and the moment their phone
+        # last said something new — see `observe`.
+        self._trips: dict[str, Trip] = {}
+        self._seen: dict[str, datetime] = {}
 
     async def _async_setup(self):
+        # A stay is made of time, so trips have to be advanced by the clock and
+        # not only by what the phone says; see `_tick`.
+        if self.config_entry:
+            self.config_entry.async_on_unload(
+                async_track_time_interval(self.hass, self._tick, timedelta(seconds=30))
+            )
+
         async with asyncio.timeout(10):
             self.homes, self.people, self.roles = await asyncio.gather(
                 # self.client.connection,
@@ -386,6 +408,154 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             _LOGGER.debug("Suspended-devices fetch failed", exc_info=True)
 
         return self._suspended
+
+    def trip(self, person_id: str) -> Trip | None:
+        """The journey this person is on, or None while they are home."""
+        return self._trips.get(person_id)
+
+    @callback
+    def observe(self, person_id: str, fix: Fix | None, now: datetime) -> None:
+        """Fold what the person's tracker just decided into their trip.
+
+        Called by `device_tracker.WelkomTracker` rather than read from the
+        entity, because the tracker is the only thing that knows which evidence
+        won: welkom's network placement or the phone. A trip starts when the
+        phone takes over and ends when welkom gets them back, so the two can
+        never disagree about whether somebody is out.
+
+        `fix` is None when welkom has them — they are home, and any trip is
+        over.
+        """
+        if fix is None:
+            if self._trips.pop(person_id, None) is not None:
+                self._seen.pop(person_id, None)
+                self.async_update_listeners()
+            return
+
+        home = self.home_circle
+        if home is None:
+            return
+
+        # The same fix arriving again is not news: the phone said it once and
+        # has been quiet since, which is exactly what `Trip.seen_at` is for.
+        spoke_at = now - fix.age
+        if self._seen.get(person_id) == spoke_at:
+            return
+        self._seen[person_id] = spoke_at
+
+        before = self._trips.get(person_id)
+        after = follow(
+            before,
+            fix,
+            home,
+            now,
+            place=self.place_at(fix),
+            settle_radius=TRIP_SETTLE_RADIUS,
+            place_radius=TRIP_PLACE_RADIUS,
+            dwell=TRIP_DWELL,
+            away_floor=TRIP_AWAY_FLOOR,
+            still_speed=TRIP_STILL_SPEED,
+        )
+        if after is not None:
+            self._trips[person_id] = after
+        if after != before:
+            self.async_update_listeners()
+
+    @callback
+    def _tick(self, now: datetime) -> None:
+        """Let the clock run on every live trip.
+
+        A stay is made of time, and a phone stops speaking the moment it has
+        nothing new to say, so without this an arrival would only ever be
+        noticed when the person moved again — which is to say, when it had
+        stopped being true.
+
+        Its own timer rather than the poll, because the coordinator runs with
+        `always_update=False`: a cycle in which welkom says exactly what it said
+        last time notifies nobody, and those are the cycles somebody sitting
+        still generates.
+        """
+        home = self.home_circle
+        if home is None:
+            return
+
+        changed = False
+        for person_id, trip in self._trips.items():
+            advanced = follow(
+                trip,
+                None,
+                home,
+                now,
+                settle_radius=TRIP_SETTLE_RADIUS,
+                place_radius=TRIP_PLACE_RADIUS,
+                dwell=TRIP_DWELL,
+                away_floor=TRIP_AWAY_FLOOR,
+                still_speed=TRIP_STILL_SPEED,
+            )
+            if advanced is not None and advanced != trip:
+                self._trips[person_id] = advanced
+                changed = True
+
+        if changed:
+            self.async_update_listeners()
+
+    @property
+    def home_circle(self) -> Circle | None:
+        """`zone.home`'s footprint, which every trip is measured against."""
+        zone = self.hass.states.get(ENTITY_ID_HOME)
+        if zone is None:
+            return None
+        zone_attrs = cast(dict[str, Any], zone.attributes)
+        latitude = zone_attrs.get(ATTR_LATITUDE)
+        longitude = zone_attrs.get(ATTR_LONGITUDE)
+        if latitude is None or longitude is None:
+            return None
+        return Circle(
+            latitude=latitude,
+            longitude=longitude,
+            radius=zone_attrs.get("radius") or 0,
+        )
+
+    def place_at(self, fix: Fix) -> str | None:
+        """The name of the smallest zone the fix is in, if any.
+
+        Smallest because zones nest: a park sits inside a borough sits inside
+        the city, and the useful name is the tightest one. By NAME, because
+        that is what a person means by a place — five overlapping rectangles
+        make up `Chapu III` here, and crossing from one into the next is not
+        going anywhere.
+
+        Home Assistant's own overlap rule, so a vague fix at the kerb outside
+        a 48 m school zone is in it, the same way it would be for any tracker.
+        Passive zones are skipped for the reason Home Assistant skips them: the
+        twelve five-metre room zones are welkom's business, not a trip's.
+        """
+        best: str | None = None
+        best_radius = TRIP_COARSE_ZONE
+        for zone_entity_id in self.hass.data.get(DATA_ZONE_ENTITY_IDS, ()):
+            if zone_entity_id == ENTITY_ID_HOME:
+                continue
+            zone = self.hass.states.get(zone_entity_id)
+            if not zone or zone.state == STATE_UNAVAILABLE:
+                continue
+
+            zone_attrs = cast(dict[str, Any], zone.attributes)
+            if zone_attrs.get("passive"):
+                continue
+            latitude = zone_attrs.get(ATTR_LATITUDE)
+            longitude = zone_attrs.get(ATTR_LONGITUDE)
+            radius = zone_attrs.get("radius")
+            if latitude is None or longitude is None or not radius:
+                continue
+            if radius >= best_radius:
+                continue
+
+            if distance(
+                fix.latitude, fix.longitude, latitude, longitude
+            ) - radius < max(fix.accuracy, 1):
+                best, best_radius = zone.name, radius
+
+        return best
 
     def gps_tracker(self, person_id: str) -> str | None:
         """The device_tracker carrying this person's phone GPS, if configured."""

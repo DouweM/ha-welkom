@@ -36,6 +36,48 @@ GPS_MAX_AGE = timedelta(minutes=15)
 # anyone having moved.
 WELKOM_HOLD = timedelta(minutes=5)
 
+# --- Trips: where somebody went while they were out --------------------------
+# See trip.py for the state machine these drive.
+#
+# How far a fix may land from the anchor and still be the same spot. Wide
+# enough to swallow a phone's own noise -- median 20 m over the week to
+# 2026-09-12, 43 m at the ninetieth percentile -- and a building, narrow enough
+# that the next block is somewhere else.
+TRIP_SETTLE_RADIUS = 150.0
+# How far a stay reaches. Somebody at dinner walks to the bar; somebody in a
+# park crosses it twice in an hour. Steps inside this of where the stay began
+# are the same visit rather than a new destination.
+TRIP_PLACE_RADIUS = 300.0
+# How long an anchor has to hold before it is somewhere they went rather than
+# the road. Long enough to sit out a traffic light, short enough that a coffee
+# is a destination.
+TRIP_DWELL = timedelta(minutes=5)
+# A trip has to get this far out to have a destination at all. Douwe's walks to
+# the Puente turn round 160 m from the house and the return leg of every real
+# trip passes through the same ground, so anything nearer is the doorstep.
+TRIP_AWAY_FLOOR = 250.0
+# Silence counts as stillness -- a phone that has arrived stops reporting, and
+# waiting for a confirming fix would mean never announcing an arrival until the
+# person left again. Past this, though, it means the phone is off, flat or out
+# of signal, and the anchor is the last thing it said rather than where anybody
+# is.
+TRIP_MAX_AGE = timedelta(minutes=30)
+# The fastest somebody can have been moving, in m/s, and still be said to have
+# stayed put through a silence. Walking pace: anything quicker was the road.
+# Silence is the only evidence a parked car and a moving one differ in, and
+# they differ in it not at all — this is how the difference is settled, once
+# the phone speaks again.
+TRIP_STILL_SPEED = 1.4
+# A trip shorter than this never happened. One bad fix hands the phone control
+# for a couple of seconds; twice in the week to 2026-09-12 that put Douwe on a
+# journey while he was standing in the garden.
+TRIP_MIN = timedelta(minutes=2)
+# A zone wider than this is a region rather than a destination. `zone.home`
+# aside, Oasis's zones run from a 48 m school to a 15.6 km `CDMX` that contains
+# every journey anybody here has ever made; naming a trip after that one would
+# mean every trip ended in the same place.
+TRIP_COARSE_ZONE = 5000.0
+
 FRONTEND_SCRIPT_URL = f"/{DOMAIN}/welkom-activity.js"
 FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script changes
 

@@ -8,6 +8,7 @@ Home Assistant integration for [welkom](https://github.com/DouweM/welcome), the 
 
 - `device_tracker.<person>` — where they are: a room of the main home, `home`, another home (`"Cabin: Kitchen"`), or `not_home`. Maps onto HA zones matching those names (`in_zones`, coordinates), so people show up on the map and count in zones. With a phone tracker configured for the person (see [Phone GPS](#phone-gps)) it also carries the phone's position while they're out — the one tracker to link to `person.<name>`.
 - `binary_sensor.<person>` — presence in the main home.
+- `sensor.<person>_trip` — what they are doing while they are out: `home`, `travelling`, or `settled` once they have stopped somewhere. Only for people with a phone tracker configured (see [Trips](#trips)). Attributes: `left_at`, `settled_at`, `place` (the zone they are in, if any), `latitude`/`longitude`, `distance` and `furthest` (metres from home), `turn` (the zone at the furthest point), `places` and `been_to` (everywhere they stopped, in order), `seen_at` and `stale`.
 - `sensor.<person>_current_device` — the device they are *actively using* right now (e.g. `Douwe's phone`), driven by welkom's activity tracking of forward-auth requests to configured services (Home Assistant itself, typically). Expires to `unknown` after welkom's `ttl` (default 2 minutes) of inactivity. Attributes: `device_type`, `network_id`, `role_id`, `host`, `room`, `last_seen_at`, `connection_summary` (welkom's concise connection description), plus the connection metadata (ip, wifi ssid, user agent summary, ...).
 
 **Per device** (each known tracker/personal device, added as it connects):
@@ -30,6 +31,22 @@ Welkom only knows the network, so on its own a person is either in a room or `no
 - **Welkom outage:** the tracker stays available, holding welkom's last placement while the phone's fix remains within the home and following the phone otherwise. (Without a phone it goes `unavailable`, so `person.*` holds its last state.)
 
 Link **only** this tracker to the Home Assistant person. Listing the phone tracker alongside it makes HA's person entity pick whichever wrote last, which is the race this merge exists to end. `binary_sensor.<person>` stays welkom's pure network view; the `source` attribute on the tracker says whether `welkom` or `gps` is speaking, and `held` whether welkom's placement is being kept through a dropout.
+
+### Trips
+
+Once a person's phone is carrying their position, `sensor.<person>_trip` follows what they do with it. A trip starts when the phone takes over from welkom and ends when welkom has them back; in between the sensor says whether they are still moving or have stopped, and collects everywhere they stopped along the way.
+
+A destination is not a position — somebody in a taxi and somebody at dinner report the same fix — so stops are found by **anchoring**: a fix that lands near the last one extends a stay, one that lands away starts a new anchor, and an anchor that holds for 5 minutes is somewhere they went. Time counts even while the phone is silent, because a phone that has arrived stops reporting; waiting for a confirming fix would mean never noticing an arrival until the person left again.
+
+A few rules fall out of that, each of which exists because the naive version gets a real journey wrong:
+
+- **Silence is checked afterwards.** A car on the motorway goes just as quiet as a parked one. When the phone speaks again, the distance it covered over the silence says which it was: a stay somebody left at more than walking pace was the road, and is discarded.
+- **Zones name places; they don't decide stillness.** A stop inside a hand-drawn zone is reported by name, wandering within the zone is one visit, and the zone is exempt from the distance floor below. But a zone never lowers the bar for holding still, or minutes of driving through a wide one would read as an evening in it. Zones are matched by *name*, so several overlapping zones called the same thing are one place, and the smallest match wins. Zones bigger than 5 km are ignored — one drawn around a city contains every trip there is.
+- **The turn counts as a destination.** Some journeys have no stay at all: a school run pulls up, the kid gets out, and it drives away. So the named zone holding the furthest fix of the trip is reported too, however briefly they were in it.
+- **Near the house doesn't count** unless it has a name. The return leg of every trip passes the same ground as the start, so an unnamed stop within 250 m of home is the doorstep — but a *named* one that near is somewhere they chose to be.
+- **A trip under 2 minutes never happened.** One bad fix can hand the phone control for a second or two.
+
+Nothing here is named beyond the zone: an unnamed stop carries only coordinates, and turning that into "La Roma, CDMX" needs a geocoder this integration has no business owning. Compose the sentence from `been_to` in a template or an automation, where the words belong.
 
 Room zones in HA are best made **passive** (a few metres around each room's spot, inside the home zone): the tracker names rooms from welkom's placement, and passive zones keep a phone's jittery GPS from ever claiming one.
 

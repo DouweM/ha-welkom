@@ -4,18 +4,29 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar, cast
 
-from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+)
 from homeassistant.components.sensor.const import SensorStateClass
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .client import WelkomClient
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    TRIP_AWAY_FLOOR,
+    TRIP_DWELL,
+    TRIP_MAX_AGE,
+    TRIP_MIN,
+)
 from .coordinator import (
     DeviceData,
     HomeData,
@@ -25,6 +36,7 @@ from .coordinator import (
     WelkomData,
 )
 from .models import Activity
+from .trip import stale
 
 NUMBER_PARAMS = {
     "state_class": SensorStateClass.MEASUREMENT,
@@ -204,7 +216,7 @@ async def async_setup_entry(
             return
 
         known_person_ids.update(new_ids)
-        async_add_entities(
+        entities: list[SensorEntity] = [
             WelkomCurrentDeviceSensor(
                 coordinator,
                 entity_description=WelkomPersonSensorDescription(
@@ -217,7 +229,25 @@ async def async_setup_entry(
                 ),
             )
             for person_id in new_ids
+        ]
+        # Only for people whose phone this integration can see: without one
+        # there is no position while they are out, and so nothing to follow.
+        entities.extend(
+            WelkomTripSensor(
+                coordinator,
+                entity_description=WelkomPersonSensorDescription(
+                    key="trip",
+                    name="Trip",
+                    client=client,
+                    context=person_id,
+                    device_id=people[person_id].unique_id,
+                    device_name=people[person_id].display_name,
+                ),
+            )
+            for person_id in new_ids
+            if coordinator.gps_tracker(person_id)
         )
+        async_add_entities(entities)
 
     _add_new_people()
     config_entry.async_on_unload(coordinator.async_add_listener(_add_new_people))
@@ -426,6 +456,109 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
         )
 
         self._attr_extra_state_attributes = attrs
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+
+        self._async_update_attrs()
+        self.async_write_ha_state()
+
+
+class WelkomTripSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
+    """Where a person went while they were out, and whether they are there yet.
+
+    The tracker says where somebody is; this says what they are doing. A trip
+    starts when their phone takes the position over from welkom and ends when
+    welkom has them back, and in between it collects the places they stopped —
+    see `trip.py`, which holds the whole decision and none of Home Assistant.
+
+    The state is deliberately a status and not a place name. Naming a place
+    needs a geocoder, and this integration has no business owning one: it
+    reports the zone when a stop lands in one and the bare coordinates when it
+    does not, and whatever composes the sentence — a template sensor, an
+    automation writing the line onto a card — can say it better than a sensor
+    state ever could.
+    """
+
+    _attr_device_info: DeviceInfo | None = None
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options: ClassVar[list[str]] = ["home", "travelling", "settled"]
+    _attr_icon = "mdi:map-marker-path"
+
+    entity_description: WelkomPersonSensorDescription
+
+    def __init__(
+        self,
+        coordinator: WelkomCoordinator,
+        entity_description: WelkomPersonSensorDescription,
+    ):
+        """Initialize the sensor."""
+
+        self.entity_description = entity_description
+
+        super().__init__(coordinator, context=entity_description.context)
+
+        self._attr_unique_id = entity_description.unique_id
+        self._attr_device_info = entity_description.device_info
+
+        self._async_update_attrs()
+
+    @property
+    def available(self) -> bool:
+        """Always, once there is a phone to follow.
+
+        Welkom going dark does not stop somebody being out — the phone is still
+        reporting, and the trip is still happening. Going unavailable here would
+        drop the itinerary just as the walk home began.
+        """
+        return True
+
+    @callback
+    def _async_update_attrs(self) -> None:
+        """Update the attributes of the entity."""
+
+        trip = self.coordinator.trip(cast(str, self.coordinator_context))
+        home = self.coordinator.home_circle
+
+        if trip is None or home is None:
+            self._attr_native_value = "home"
+            self._attr_extra_state_attributes = {}
+            return
+
+        now = dt_util.utcnow()
+        arrived = trip.arrived(home, TRIP_AWAY_FLOOR)
+        self._attr_native_value = "settled" if arrived else "travelling"
+
+        been_to = trip.been_to(
+            home, dwell=TRIP_DWELL, min_trip=TRIP_MIN, away_floor=TRIP_AWAY_FLOOR
+        )
+        self._attr_extra_state_attributes = {
+            "left_at": trip.left_at,
+            "settled_at": trip.settled_at if arrived else None,
+            "place": trip.place,
+            "latitude": trip.latitude,
+            "longitude": trip.longitude,
+            "distance": round(trip.distance_from(home)),
+            "furthest": round(trip.furthest),
+            "turn": trip.furthest_place,
+            # Whether the phone has been quiet long enough that none of this is
+            # current any more.
+            "stale": stale(trip, now, TRIP_MAX_AGE),
+            "seen_at": trip.seen_at,
+            "places": [stay.place for stay in been_to],
+            "been_to": [
+                {
+                    "place": stay.place,
+                    "latitude": stay.latitude,
+                    "longitude": stay.longitude,
+                    "since": stay.since,
+                    "until": stay.until,
+                    "minutes": round(stay.duration.total_seconds() / 60),
+                }
+                for stay in been_to
+            ],
+        }
 
     @callback
     def _handle_coordinator_update(self) -> None:
