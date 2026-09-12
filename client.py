@@ -1,9 +1,10 @@
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import aiohttp
 from pydantic import BaseModel
 
+from .const import IMAGE_URL_PREFIX
 from .models import ConnectedPerson, Connection, Home, Person, Role
 
 
@@ -45,7 +46,9 @@ class WelkomClient(BaseModel):
     async def homes(self) -> dict[str, Home]:
         if self._homes is None:
             raw_homes = await self.request(f"{self.url}/api/homes")
-            homes = [Home.model_validate(home) for home in raw_homes]
+            homes = [
+                self._proxy_images(Home.model_validate(home)) for home in raw_homes
+            ]
             self._homes = {home.id: home for home in homes}
         return self._homes
 
@@ -58,9 +61,36 @@ class WelkomClient(BaseModel):
     async def fetch_people(self) -> dict[str, Person]:
         """Fetch the people list from the API, bypassing the cache."""
         raw_people = await self.request(f"{self.url}/api/people")
-        people = [Person.model_validate(person) for person in raw_people]
+        people = [
+            self._proxy_images(Person.model_validate(person)) for person in raw_people
+        ]
         self._people = {person.id: person for person in people}
         return self._people
+
+    def proxied_url(self, url: str | None) -> str | None:
+        """A picture URL as the browser should load it.
+
+        Pictures welkom serves itself come back as absolute URLs on welkom's
+        host, which browsers can't reach the way this integration can (see
+        images.py); those are rewritten to the integration's same-origin
+        proxy. Anything hosted elsewhere is left alone.
+        """
+        if not url:
+            return url
+        ours, theirs = urlsplit(self.url), urlsplit(url)
+        if theirs.netloc.lower() != ours.netloc.lower():
+            return url
+        if not theirs.path.startswith("/api/"):
+            return url
+        proxied = f"{IMAGE_URL_PREFIX}{theirs.path.removeprefix('/api')}"
+        return f"{proxied}?{theirs.query}" if theirs.query else proxied
+
+    def _proxy_images[T: Person | Home](self, model: T) -> T:
+        model.avatar_url = self.proxied_url(model.avatar_url)
+        if isinstance(model, Home):
+            for image in model.images.values():
+                image.url = self.proxied_url(image.url) or image.url
+        return model
 
     # @property
     # async def devices(self) -> dict[str, Device]:
@@ -90,10 +120,15 @@ class WelkomClient(BaseModel):
 
     async def connected_people(self, home_id: str) -> list[ConnectedPerson]:
         raw_connected_people = await self.request(f"{self.home_url(home_id)}/people")
-        return [
+        connected_people = [
             ConnectedPerson.model_validate(connected_person)
             for connected_person in raw_connected_people
         ]
+        for connected_person in connected_people:
+            self._proxy_images(connected_person.person)
+            if connected_person.home:
+                self._proxy_images(connected_person.home)
+        return connected_people
 
     def home_url(self, home_id: str) -> str:
         return f"{self.url}/api/homes/{quote(home_id, safe='')}"

@@ -71,6 +71,23 @@ automation:
 {{ states('sensor.douwe_current_device') not in ['unknown', 'unavailable'] }}
 ```
 
+## Pictures
+
+Welkom can host the household's pictures itself — a person's avatar, the home's, and a home's `images` (a drone shot of the house, say) as files next to its config — and the integration serves them from Home Assistant's own origin: `/welkom/people/<id>/avatar`, `/welkom/homes/<id>/avatar`, `/welkom/homes/<id>/images/<name>`. Entity pictures point there, so they load on whatever host the dashboard was opened on (the LAN name, a public one, the companion app) without the browser ever needing to reach welkom or be identified by it. Pictures welkom merely links to (Gravatar, an image host) are passed through as-is.
+
+A home image with map `bounds` can be laid over any [ha-map-card](https://github.com/nathan-gs/ha-map-card) with the bundled plugin — the file and its corners stay in welkom, the dashboard only names which image it wants:
+
+```yaml
+type: custom:map-card
+plugins:
+- name: aerial
+  url: /welkom/map-image.js
+  options:
+    home: home          # welkom home id
+    image: aerial       # key under the home's `images`; defaults to "aerial"
+    opacity: 1          # optional
+```
+
 ## Installation
 
 1. Add this repository to HACS as a custom repository (type: integration) and install **Welkom**, or copy the files into `custom_components/welkom/`.

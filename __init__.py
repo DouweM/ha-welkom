@@ -33,9 +33,13 @@ from .const import (
     DOMAIN,
     FRONTEND_SCRIPT_URL,
     FRONTEND_SCRIPT_VERSION,
+    MAP_IMAGE_SCRIPT_URL,
 )
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
+from .images import WelkomImageView
 from .ping import WelkomPingView
+
+DATA_IMAGES_REGISTERED = "images_registered"
 
 _PLATFORMS: list[Platform] = [
     Platform.DEVICE_TRACKER,
@@ -116,6 +120,11 @@ async def async_setup_entry(
 
     await coordinator.async_config_entry_first_refresh()
 
+    # Pictures are proxied whatever mode the entry runs in: an auth-only
+    # instance still shows dashboards whose entity pictures (bridged from
+    # another instance) and map overlays point at this same-origin proxy.
+    await _async_setup_images(hass)
+
     # Auth routing only needs the coordinator (for each person's assigned role);
     # the presence entities are optional (see CONF_CREATE_ENTITIES).
     platforms = _selected_platforms(config_entry)
@@ -160,6 +169,25 @@ async def async_setup_entry(
     )
 
     return True
+
+
+async def _async_setup_images(hass: HomeAssistant) -> None:
+    """Register the picture proxy and the map-card plugin, once per instance."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get(DATA_IMAGES_REGISTERED):
+        return
+    domain_data[DATA_IMAGES_REGISTERED] = True
+
+    hass.http.register_view(WelkomImageView(hass))
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                MAP_IMAGE_SCRIPT_URL,
+                str(Path(__file__).parent / "welkom-map-image.js"),
+                cache_headers=True,
+            ),
+        ]
+    )
 
 
 @callback

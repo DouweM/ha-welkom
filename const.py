@@ -45,6 +45,14 @@ FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script chan
 PING_CLAIM_URL = f"/{DOMAIN}/claim"
 PING_SUSTAIN_URL = f"/{DOMAIN}/sustain"
 
+# --- Pictures ---------------------------------------------------------------
+# Welkom's avatars and home images are proxied from HA's own origin under this
+# prefix (see images.py), mirroring welkom's /api paths: a welkom URL of
+# `<welkom>/api/people/x/avatar` becomes `/welkom/people/x/avatar` here.
+IMAGE_URL_PREFIX = f"/{DOMAIN}"
+# ha-map-card plugin that overlays one of a home's images on the map.
+MAP_IMAGE_SCRIPT_URL = f"/{DOMAIN}/map-image.js"
+
 # --- Auth routing -----------------------------------------------------------
 # Welkom's forward auth stamps identity onto every request as `X-Welcome-*`
 # response headers. When auth routing is enabled, the integration injects an

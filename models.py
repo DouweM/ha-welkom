@@ -266,10 +266,18 @@ class Home(Area):
 
         return code
 
-    @computed_field
-    @property
-    def avatar_url(self) -> str | None:
-        return self.attrs.avatar_url
+    # Resolved by welkom: an absolute URL whether the picture is hosted
+    # elsewhere or a file welkom serves itself (the raw attr may be a path).
+    avatar_url: str | None = None
+
+    class Image(BaseModel):
+        """One of the home's pictures, and where it sits on the map."""
+
+        url: str
+        bounds: list[list[float]] | None = None
+        """[[south lat, west lon], [north lat, east lon]]"""
+
+    images: dict[str, Image] = {}
 
     def __hash__(self):
         return hash(self.id)
