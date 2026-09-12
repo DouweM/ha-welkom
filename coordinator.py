@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any, cast
@@ -19,7 +20,7 @@ from homeassistant.const import (
     STATE_HOME,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import slugify
@@ -161,6 +162,13 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # last said something new — see `observe`.
         self._trips: dict[str, Trip] = {}
         self._seen: dict[str, datetime] = {}
+        # Told separately from the coordinator's own listeners, and that is not
+        # tidiness. `observe` is called BY a listener — the person's tracker,
+        # deciding whose evidence won — so telling the coordinator's listeners
+        # from inside it re-enters the tracker, which observes again, which
+        # tells them again. Home Assistant kills the dispatch after ten
+        # thousand queued events and the instance stops answering.
+        self._trip_listeners: list[Callable[[], None]] = []
 
     async def _async_setup(self):
         # A stay is made of time, so trips have to be advanced by the clock and
@@ -409,6 +417,22 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
         return self._suspended
 
+    @callback
+    def add_trip_listener(self, update_callback: Callable[[], None]) -> CALLBACK_TYPE:
+        """Listen for trip changes, which the poll cycle does not carry."""
+
+        def remove() -> None:
+            if update_callback in self._trip_listeners:
+                self._trip_listeners.remove(update_callback)
+
+        self._trip_listeners.append(update_callback)
+        return remove
+
+    @callback
+    def _notify_trips(self) -> None:
+        for update_callback in list(self._trip_listeners):
+            update_callback()
+
     def trip(self, person_id: str) -> Trip | None:
         """The journey this person is on, or None while they are home."""
         return self._trips.get(person_id)
@@ -429,7 +453,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         if fix is None:
             if self._trips.pop(person_id, None) is not None:
                 self._seen.pop(person_id, None)
-                self.async_update_listeners()
+                self._notify_trips()
             return
 
         home = self.home_circle
@@ -459,7 +483,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         if after is not None:
             self._trips[person_id] = after
         if after != before:
-            self.async_update_listeners()
+            self._notify_trips()
 
     @callback
     def _tick(self, now: datetime) -> None:
@@ -497,7 +521,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 changed = True
 
         if changed:
-            self.async_update_listeners()
+            self._notify_trips()
 
     @property
     def home_circle(self) -> Circle | None:
