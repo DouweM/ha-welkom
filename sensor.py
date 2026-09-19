@@ -15,6 +15,11 @@ from homeassistant.components.sensor.const import SensorStateClass
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import (
+    ExtraStoredData,
+    RestoredExtraData,
+    RestoreEntity,
+)
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -36,7 +41,7 @@ from .coordinator import (
     WelkomData,
 )
 from .models import Activity
-from .trip import stale
+from .trip import stale, trip_as_dict, trip_from_dict
 
 NUMBER_PARAMS = {
     "state_class": SensorStateClass.MEASUREMENT,
@@ -465,7 +470,9 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
         self.async_write_ha_state()
 
 
-class WelkomTripSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
+class WelkomTripSensor(
+    CoordinatorEntity[WelkomCoordinator], RestoreEntity, SensorEntity
+):
     """Where a person went while they were out, and whether they are there yet.
 
     The tracker says where somebody is; this says what they are doing. A trip
@@ -504,17 +511,45 @@ class WelkomTripSensor(CoordinatorEntity[WelkomCoordinator], SensorEntity):
 
         self._async_update_attrs()
 
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData | None:
+        """The live trip, whole, so a restart does not end it.
+
+        Not the state attributes: those are a summary for templates, and a trip
+        rebuilt from them could be shown but not continued. `trip_as_dict` says
+        what is missing from them and why it matters.
+
+        Nothing at all when they are home, which is what keeps a finished trip
+        from being resurrected: a restart hands back only what was still
+        running when Home Assistant stopped.
+        """
+        trip = self.coordinator.trip(cast(str, self.coordinator_context))
+        return RestoredExtraData(trip_as_dict(trip)) if trip else None
+
     async def async_added_to_hass(self) -> None:
-        """Listen for trip changes as well as for the poll.
+        """Listen for trip changes, and hand back whatever outlived the restart.
 
         A trip moves on its own clock — a stay is made of time, and the poll
         cycle that notices nothing new notifies nobody — so the coordinator
         announces those separately.
+
+        The remembered trip goes to the coordinator rather than being held
+        here, because the coordinator owns trips and always has: the tracker
+        feeds them, this reads them, and a restart is not a reason for the
+        sensor to start keeping one of its own. It is only claimed when the
+        tracker next says the person is out, and only if it is still fresh
+        enough to be true — see `WelkomCoordinator.restore_trip`.
         """
         await super().async_added_to_hass()
         self.async_on_remove(
             self.coordinator.add_trip_listener(self._handle_coordinator_update)
         )
+
+        last = await self.async_get_last_extra_data()
+        if last is not None and (remembered := trip_from_dict(last.as_dict())):
+            self.coordinator.restore_trip(
+                cast(str, self.coordinator_context), remembered
+            )
 
     @property
     def available(self) -> bool:

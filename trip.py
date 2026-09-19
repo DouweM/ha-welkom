@@ -33,14 +33,23 @@ and is still somewhere he went. What zones must NOT do is lower the bar for
 holding still, or four minutes of driving through a one-kilometre zone would
 read as an evening in it.
 
+A trip outlives a restart. It has to: Home Assistant restarted by itself on
+2026-09-17, and the one on 2026-09-12 landed in the middle of an evening out
+and left both sensors reporting `left_at` as 20:15 — when HA came back — for
+something that started at 14:15, with an empty itinerary behind it. So the
+whole object is written out and read back by `trip_as_dict` / `trip_from_dict`,
+and the coordinator continues it on the next fix rather than starting again.
+
 Pure, like `location.py`: no Home Assistant imports, so `tests/check_trip.py`
 exercises the whole state machine without booting HA.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from typing import Any
 
 from .location import Circle, Fix, distance
 
@@ -491,6 +500,132 @@ def _settle(trip: Trip, now: datetime, dwell: timedelta) -> Trip:
         stay_longitude=trip.longitude,
         stay_place=trip.place,
     )
+
+
+_SCHEMA = 1
+
+
+def _moment(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _read_moment(value: Any) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
+def trip_as_dict(trip: Trip) -> dict[str, Any]:
+    """The whole trip as plain JSON, for a restart to hand back.
+
+    Everything, and not the sensor's own attributes, because those are a
+    summary written for templates: they flatten `been_to` into names and
+    minutes and say nothing at all about the anchor, `anchor_seen_at`, or where
+    the last fix actually landed. A trip rebuilt from them could be displayed
+    but not *continued* — the next fix has to be measured against the anchor to
+    decide whether anybody moved, and against `seen_at` to decide whether the
+    silence before it was a restaurant or a motorway.
+
+    Datetimes are written out as ISO strings by hand, and read back the same
+    way. Home Assistant's store would happily stringify them on the way out on
+    its own, which is exactly the trap: nothing would stringify them back, and
+    the restored `Trip` would carry `str` where the arithmetic expects
+    `datetime` and fail on the first tick.
+    """
+    return {
+        "v": _SCHEMA,
+        "left_at": _moment(trip.left_at),
+        "latitude": trip.latitude,
+        "longitude": trip.longitude,
+        "anchor_since": _moment(trip.anchor_since),
+        "anchor_seen_at": _moment(trip.anchor_seen_at),
+        "seen_at": _moment(trip.seen_at),
+        "seen_latitude": trip.seen_latitude,
+        "seen_longitude": trip.seen_longitude,
+        "place": trip.place,
+        "settled_at": _moment(trip.settled_at),
+        "stay_latitude": trip.stay_latitude,
+        "stay_longitude": trip.stay_longitude,
+        "stay_place": trip.stay_place,
+        "visits": [
+            {
+                "place": visit.place,
+                "since": _moment(visit.since),
+                "until": _moment(visit.until),
+            }
+            for visit in trip.visits
+        ],
+        "stays": [
+            {
+                "latitude": stay.latitude,
+                "longitude": stay.longitude,
+                "place": stay.place,
+                "since": _moment(stay.since),
+                "until": _moment(stay.until),
+            }
+            for stay in trip.stays
+        ],
+        "furthest": trip.furthest,
+        "furthest_at": _moment(trip.furthest_at),
+        "furthest_latitude": trip.furthest_latitude,
+        "furthest_longitude": trip.furthest_longitude,
+        "furthest_place": trip.furthest_place,
+        "ventured": trip.ventured,
+    }
+
+
+def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
+    """Read back what `trip_as_dict` wrote, or None if it cannot be trusted.
+
+    None rather than an exception for anything unreadable — a shape this
+    version does not know, a key that moved, a half-written store. The cost of
+    declining is one trip that starts fresh; the cost of raising is a sensor
+    that fails to set up at all, and losing an itinerary is not worth losing
+    the entity over.
+    """
+    if not data or data.get("v") != _SCHEMA:
+        return None
+
+    try:
+        return Trip(
+            left_at=datetime.fromisoformat(data["left_at"]),
+            latitude=data["latitude"],
+            longitude=data["longitude"],
+            anchor_since=datetime.fromisoformat(data["anchor_since"]),
+            anchor_seen_at=_read_moment(data.get("anchor_seen_at")),
+            seen_at=datetime.fromisoformat(data["seen_at"]),
+            seen_latitude=data.get("seen_latitude", 0.0),
+            seen_longitude=data.get("seen_longitude", 0.0),
+            place=data.get("place"),
+            settled_at=_read_moment(data.get("settled_at")),
+            stay_latitude=data.get("stay_latitude"),
+            stay_longitude=data.get("stay_longitude"),
+            stay_place=data.get("stay_place"),
+            visits=tuple(
+                Visit(
+                    place=visit["place"],
+                    since=datetime.fromisoformat(visit["since"]),
+                    until=datetime.fromisoformat(visit["until"]),
+                )
+                for visit in data.get("visits", ())
+            ),
+            stays=tuple(
+                Stay(
+                    latitude=stay["latitude"],
+                    longitude=stay["longitude"],
+                    place=stay.get("place"),
+                    since=datetime.fromisoformat(stay["since"]),
+                    until=datetime.fromisoformat(stay["until"]),
+                )
+                for stay in data.get("stays", ())
+            ),
+            furthest=data.get("furthest", 0.0),
+            furthest_at=_read_moment(data.get("furthest_at")),
+            furthest_latitude=data.get("furthest_latitude"),
+            furthest_longitude=data.get("furthest_longitude"),
+            furthest_place=data.get("furthest_place"),
+            ventured=data.get("ventured", False),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def stale(trip: Trip, now: datetime, max_age: timedelta) -> bool:

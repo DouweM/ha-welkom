@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import importlib.util
+import json
 import pathlib
 import sys
 import types
@@ -382,5 +383,70 @@ puente = replay(EVENING_AT_THE_PUENTE)
 check("the evening walk went to the bridge", "Puente" in been(puente), True)
 check("...which is inside the away floor", puente.furthest < AWAY_FLOOR, True)
 check("...so it only counts because it has a name", puente.ventured, False)
+
+# --- surviving a restart -----------------------------------------------------
+# The whole object has to come back, not the sensor's summary of it: `chapu` is
+# a real trip with a finished stay, an open one, visits and a turn, and every
+# one of those is something the next fix will be measured against.
+MAX_AGE = timedelta(minutes=30)
+
+written = trip_mod.trip_as_dict(chapu)
+read_back = trip_mod.trip_from_dict(written)
+assert read_back is not None
+check("a trip round-trips through JSON unchanged", read_back == chapu, True)
+check(
+    "...including the stays that were already over",
+    [stay.place for stay in read_back.stays],
+    ["Puente", "Chapu II"],
+)
+check("...and the turn it got to", read_back.furthest_place, "Chapu II")
+check(
+    "what was written is really JSON",
+    json.loads(json.dumps(written)) == written,
+    True,
+)
+
+check("nothing to read is nothing", trip_mod.trip_from_dict(None), None)
+check(
+    "a shape from another version is refused", trip_mod.trip_from_dict({"v": 99}), None
+)
+check(
+    "so is one missing what a trip needs",
+    trip_mod.trip_from_dict({"v": 1, "left_at": T0.isoformat()}),
+    None,
+)
+check(
+    "and so is a moment that is not one",
+    trip_mod.trip_from_dict({**written, "seen_at": "half past"}),
+    None,
+)
+
+
+# The rule `WelkomCoordinator.observe` applies before it claims a remembered
+# trip: the same `stale` the sensor reports with, against the same
+# `TRIP_MAX_AGE`, so nothing is resurrected that the live path would decline to
+# vouch for.
+def restorable(trip, now) -> bool:
+    return not trip_mod.stale(trip, now, MAX_AGE)
+
+
+parked = step(step(None, at(600), 0, "Chapu II"), None, 300)
+check(
+    "a trip whose phone spoke 29 minutes ago is still claimable",
+    restorable(parked, parked.seen_at + timedelta(minutes=29)),
+    True,
+)
+check(
+    "...and one 31 minutes quiet is not",
+    restorable(parked, parked.seen_at + timedelta(minutes=31)),
+    False,
+)
+carried = trip_mod.trip_from_dict(trip_mod.trip_as_dict(parked))
+assert carried is not None
+check(
+    "a restart of a few minutes keeps the real departure",
+    carried.left_at,
+    parked.left_at,
+)
 
 print("all trip checks passed")

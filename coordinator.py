@@ -30,6 +30,7 @@ from .const import (
     TRIP_AWAY_FLOOR,
     TRIP_COARSE_ZONE,
     TRIP_DWELL,
+    TRIP_MAX_AGE,
     TRIP_PLACE_RADIUS,
     TRIP_SETTLE_RADIUS,
     TRIP_STILL_SPEED,
@@ -46,7 +47,7 @@ from .models import (
     Role,
     Room,
 )
-from .trip import Trip, follow
+from .trip import Trip, follow, stale
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -162,6 +163,9 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # last said something new — see `observe`.
         self._trips: dict[str, Trip] = {}
         self._seen: dict[str, datetime] = {}
+        # Trips carried over a restart, waiting for the tracker to say whether
+        # they are still happening — see `restore_trip`.
+        self._remembered: dict[str, Trip] = {}
         # Told separately from the coordinator's own listeners, and that is not
         # tidiness. `observe` is called BY a listener — the person's tracker,
         # deciding whose evidence won — so telling the coordinator's listeners
@@ -438,6 +442,26 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         return self._trips.get(person_id)
 
     @callback
+    def restore_trip(self, person_id: str, trip: Trip) -> None:
+        """Take back a trip that outlived a restart, to be continued or dropped.
+
+        Remembered rather than installed, and that is about ordering. The
+        tracker builds itself and calls `observe` from its own constructor,
+        before any entity has been added to hass, while this arrives from the
+        sensor's `async_added_to_hass` — and the two live on different
+        platforms, set up independently. Neither end can say which speaks
+        first. Installing this as the live trip would therefore sometimes
+        overwrite a fix the tracker had already folded in, and sometimes be
+        overwritten by one; waiting to be claimed is the same answer whichever
+        order they happen in.
+
+        Nothing is claimed until the tracker next says the person is out. Until
+        then the sensor reads `home`, which is the honest answer: welkom has
+        not spoken yet, and a restart is not evidence about where anybody is.
+        """
+        self._remembered[person_id] = trip
+
+    @callback
     def observe(self, person_id: str, fix: Fix | None, now: datetime) -> None:
         """Fold what the person's tracker just decided into their trip.
 
@@ -451,6 +475,9 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         over.
         """
         if fix is None:
+            # Home. Whatever was remembered across the restart is over too —
+            # they may well have walked in while Home Assistant was down.
+            self._remembered.pop(person_id, None)
             if self._trips.pop(person_id, None) is not None:
                 self._seen.pop(person_id, None)
                 self._notify_trips()
@@ -468,6 +495,24 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         self._seen[person_id] = spoke_at
 
         before = self._trips.get(person_id)
+        if before is None:
+            # A trip from before the restart, claimed by the first fix that
+            # says they are still out — and dropped either way, so a stale one
+            # cannot sit around waiting for a later chance.
+            #
+            # Judged here rather than when it was handed back, because this is
+            # where `now` is real. `TRIP_MAX_AGE` and no new threshold: within
+            # it, silence is already read as stillness everywhere else here —
+            # the dwell counts it, an arrival is announced out of it — so a
+            # trip carried across a two-minute restart is exactly as believable
+            # as one that sat through two quiet minutes with Home Assistant up.
+            # Past it the module already declines to vouch for the anchor; that
+            # is what `stale` tells the sensor, and resurrecting a trip it
+            # would refuse to stand behind is not a thing to do quietly.
+            remembered = self._remembered.pop(person_id, None)
+            if remembered is not None and not stale(remembered, now, TRIP_MAX_AGE):
+                before = remembered
+
         after = follow(
             before,
             fix,
