@@ -100,6 +100,11 @@ class Trip:
     anchor_since: datetime
     """When they last arrived at the anchor — reset by every move."""
 
+    anchor_seen_at: datetime | None = None
+    """The last fix that actually landed in the anchor, as opposed to the last
+    tick that passed over it. The difference is what tells a stay somebody was
+    *watched* sitting through from one the clock inferred out of silence."""
+
     seen_at: datetime
     seen_latitude: float = 0.0
     seen_longitude: float = 0.0
@@ -338,6 +343,7 @@ def follow(
             latitude=fix.latitude,
             longitude=fix.longitude,
             anchor_since=now,
+            anchor_seen_at=now,
             seen_at=now,
             seen_latitude=fix.latitude,
             seen_longitude=fix.longitude,
@@ -355,6 +361,11 @@ def follow(
     # about to be rewritten with the new one and the re-anchor below turns on
     # the difference between the two.
     was = trip.place
+    # Whether fixes, and not merely the clock, held this anchor for the dwell.
+    watched = (
+        trip.anchor_seen_at is not None
+        and trip.anchor_seen_at - trip.anchor_since >= dwell
+    )
 
     # How far they have come since the phone last spoke, and how long it took.
     # Read before the trip is rewritten, because it is the only thing that can
@@ -385,6 +396,7 @@ def follow(
 
     moved = distance(fix.latitude, fix.longitude, trip.latitude, trip.longitude)
     if moved <= max(settle_radius, fix.accuracy):
+        trip = replace(trip, anchor_seen_at=now)
         # Still here. The anchor is deliberately NOT dragged towards the new
         # fix: letting it follow the noise lets a stay walk down the street a
         # few meters at a time and never trip the radius, which is how a moving
@@ -407,7 +419,9 @@ def follow(
         )
 
     if within_stay:
-        return replace(trip, latitude=fix.latitude, longitude=fix.longitude)
+        return replace(
+            trip, latitude=fix.latitude, longitude=fix.longitude, anchor_seen_at=now
+        )
 
     # They have left. A stay that was running is now a stay that happened, and
     # is kept: the itinerary is the whole point of asking where somebody went.
@@ -420,14 +434,28 @@ def follow(
     # kilometres in eight minutes is not somebody who was sitting down, and two
     # kilometres in two hours is. Speed, not silence, and it is only knowable
     # afterwards.
+    #
+    # Only for a stay the clock inferred. A stay that fixes actually held for
+    # the dwell -- somebody sat there and their phone kept saying so -- is not
+    # up for reconsideration, and testing it destroyed real evenings: leaving
+    # anywhere is faster than walking pace, so the first version threw away
+    # every stay at the moment it ended and `been_to` never held more than the
+    # one they were in. Douwe and Gaby's evening out on 2026-09-12 came home
+    # remembering the last five minutes of itself.
     finished = trip.stay
-    if finished and quiet_for > 0 and travelled / quiet_for > still_speed:
+    if (
+        finished
+        and not watched
+        and quiet_for > 0
+        and travelled / quiet_for > still_speed
+    ):
         finished = None
     return replace(
         trip,
         latitude=fix.latitude,
         longitude=fix.longitude,
         anchor_since=now,
+        anchor_seen_at=now,
         settled_at=None,
         stay_latitude=None,
         stay_longitude=None,
