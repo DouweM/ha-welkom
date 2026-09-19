@@ -21,7 +21,7 @@ furthest point of the trip and the turn for home; Lomas is passed through.
 So there are two ways to have been somewhere:
 
     a stay      — still, in one spot, for `dwell`
-    the turn    — the named zone holding the furthest fix of the whole trip
+    the turn    — the tightest named zone near the far end of the trip
 
 and a trip is told as both, plus the named zones it passed through on the way.
 
@@ -52,6 +52,23 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .location import Circle, Fix, distance
+
+
+@dataclass(frozen=True, kw_only=True)
+class Place:
+    """A hand-drawn zone a fix fell in: what it is called, and how big it is.
+
+    The size travels with the name because the turn has to choose between two
+    zones that both contain the far end of a trip, and the tighter one is the
+    one that means something. On 2026-09-17 Gaby's school run reported "Lomas",
+    a one-kilometre zone she was merely driving through, because the single
+    furthest fix of the trip landed 779 m out on the road and the school fix
+    landed 775 m out nine seconds later. Four metres decided the name of the
+    journey.
+    """
+
+    name: str
+    radius: float
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -109,6 +126,24 @@ class Trip:
     anchor_since: datetime
     """When they last arrived at the anchor — reset by every move."""
 
+    anchor_place: str | None = None
+    anchor_radius: float | None = None
+    """The tightest zone seen while THIS anchor has held, which is what a stay
+    in it is called.
+
+    Neither end of the anchor will do, and both were tried. The zone of the
+    latest fix names a stay after wherever they have got to by the time the
+    clock settles it: Gaby parks at the school, her phone goes quiet, and five
+    minutes later the newest fix is 200 m down the road and inside the
+    kilometre-wide neighbourhood instead. The zone of the FIRST fix names it
+    after the approach: the fix that lays the anchor is 110 m short of the
+    school gate, on the same road, and the school fix arrives twenty seconds
+    later without moving far enough to re-anchor.
+
+    An anchor is a patch of ground held over minutes, not a point, so it is
+    named the way the turn is: the smallest zone anything in it fell inside.
+    A school inside a neighbourhood is the school."""
+
     anchor_seen_at: datetime | None = None
     """The last fix that actually landed in the anchor, as opposed to the last
     tick that passed over it. The difference is what tells a stay somebody was
@@ -131,7 +166,6 @@ class Trip:
 
     stay_latitude: float | None = None
     stay_longitude: float | None = None
-    stay_place: str | None = None
     """Where the stay began. A place is bigger than an anchor — somebody at
     dinner walks to the bar — so a step within `place_radius` of THIS point
     keeps the stay rather than starting a new one. Measured from where the stay
@@ -140,10 +174,8 @@ class Trip:
     clean across the city. Unused while `place` is set, which is a stronger
     answer to the same question.
 
-    `stay_place` is the zone it happened in, remembered rather than read off
-    `place` when the stay ends: by then `place` is wherever they have moved on
-    to, and a stay labelled with the place they left for is worse than one with
-    no label at all."""
+    What it is CALLED is `anchor_place`, not anything recorded here: a stay is
+    named after the tightest zone its anchor ever saw."""
 
     visits: tuple[Visit, ...] = ()
     """Every named zone the trip has been through, in order, with the last one
@@ -154,13 +186,25 @@ class Trip:
     """The stays that are over. The live one, if there is one, is `stay`."""
 
     furthest: float = 0.0
-    furthest_at: datetime | None = None
-    furthest_latitude: float | None = None
-    furthest_longitude: float | None = None
-    furthest_place: str | None = None
-    """The most distant fix of the trip, where and when. A destination can be
-    nearer than the turning point on the way back, and a school run has no stay
-    at all — the turn is the whole of what happened."""
+    """How far out the trip got, in meters. A destination can be nearer than
+    the turning point on the way back."""
+
+    turn_place: str | None = None
+    turn_radius: float | None = None
+    turn_distance: float = 0.0
+    turn_at: datetime | None = None
+    turn_latitude: float | None = None
+    turn_longitude: float | None = None
+    """The turn: the tightest named zone holding a fix near the far end of the
+    trip, and where and when that fix was.
+
+    Near the far end rather than AT it, which is the whole point. You reach a
+    destination by driving towards it, so the single furthest fix is usually
+    the road just short of the gate — and a school run has no stay to fall back
+    on, so that one fix is all the trip has to say for itself. Any fix within
+    `turn_slack` of the furthest is a candidate, and the smallest zone among
+    them wins, because a school inside a neighbourhood is what somebody meant
+    by where they went."""
 
     ventured: bool = False
     """Whether any fix got beyond `away_floor`. A trip that never did, and
@@ -183,7 +227,7 @@ class Trip:
             longitude=self.stay_longitude
             if self.stay_longitude is not None
             else self.longitude,
-            place=self.stay_place,
+            place=self.anchor_place,
             since=self.settled_at,
             until=self.seen_at,
         )
@@ -195,14 +239,14 @@ class Trip:
         Not a stay — they may have been there for eleven seconds — but the same
         shape, because to everything downstream it is the same kind of fact.
         """
-        if self.furthest_at is None or self.furthest_latitude is None:
+        if self.turn_place is None or self.turn_at is None:
             return None
         return Stay(
-            latitude=self.furthest_latitude,
-            longitude=self.furthest_longitude or 0.0,
-            place=self.furthest_place,
-            since=self.furthest_at,
-            until=self.furthest_at,
+            latitude=self.turn_latitude or 0.0,
+            longitude=self.turn_longitude or 0.0,
+            place=self.turn_place,
+            since=self.turn_at,
+            until=self.turn_at,
         )
 
     def distance_from(self, home: Circle) -> float:
@@ -282,7 +326,7 @@ class Trip:
             for visit in self.visits
             if visit.duration >= dwell
         )
-        if (turn := self.turn) and turn.place is not None:
+        if turn := self.turn:
             found.append(turn)
 
         found.sort(key=lambda stay: stay.since)
@@ -313,12 +357,13 @@ def follow(
     home: Circle,
     now: datetime,
     *,
-    place: str | None = None,
+    place: Place | None = None,
     settle_radius: float,
     place_radius: float,
     dwell: timedelta,
     away_floor: float,
     still_speed: float,
+    turn_slack: float,
 ) -> Trip | None:
     """Fold one observation into the trip, returning the trip as it now stands.
 
@@ -326,8 +371,10 @@ def follow(
     the two carry different news and both matter: a fix can move the anchor, and
     the passage of time alone can settle it.
 
-    `place` is the name of the smallest hand-drawn zone the fix falls in, which
-    the caller resolves because zones live in Home Assistant. It should already
+    `place` is the smallest hand-drawn zone the fix falls in, which the caller
+    resolves because zones live in Home Assistant. `turn_slack` is how far back
+    from the trip's furthest point a fix may be and still say where they were
+    heading. It should already
     exclude the ones too big to be a destination — a zone drawn around a whole
     city says nothing about where in it somebody is.
 
@@ -346,23 +393,29 @@ def follow(
 
     from_home = distance(fix.latitude, fix.longitude, home.latitude, home.longitude)
 
+    name = place.name if place else None
+
     if trip is None:
         return Trip(
             left_at=now,
             latitude=fix.latitude,
             longitude=fix.longitude,
             anchor_since=now,
+            anchor_place=name,
+            anchor_radius=place.radius if place else None,
             anchor_seen_at=now,
             seen_at=now,
             seen_latitude=fix.latitude,
             seen_longitude=fix.longitude,
-            place=place,
-            visits=(Visit(place=place, since=now, until=now),) if place else (),
+            place=name,
+            visits=(Visit(place=name, since=now, until=now),) if name else (),
             furthest=from_home,
-            furthest_at=now,
-            furthest_latitude=fix.latitude,
-            furthest_longitude=fix.longitude,
-            furthest_place=place,
+            turn_place=name,
+            turn_radius=place.radius if place else None,
+            turn_distance=from_home,
+            turn_at=now if place else None,
+            turn_latitude=fix.latitude,
+            turn_longitude=fix.longitude,
             ventured=from_home >= away_floor,
         )
 
@@ -389,23 +442,16 @@ def follow(
         seen_at=now,
         seen_latitude=fix.latitude,
         seen_longitude=fix.longitude,
-        place=place,
-        visits=_visited(trip.visits, place, now),
+        place=name,
+        visits=_visited(trip.visits, name, now),
         ventured=trip.ventured or from_home >= away_floor,
+        furthest=max(trip.furthest, from_home),
     )
-    if from_home > trip.furthest:
-        trip = replace(
-            trip,
-            furthest=from_home,
-            furthest_at=now,
-            furthest_latitude=fix.latitude,
-            furthest_longitude=fix.longitude,
-            furthest_place=place,
-        )
+    trip = _turn(trip, fix, place, from_home, now, turn_slack)
 
     moved = distance(fix.latitude, fix.longitude, trip.latitude, trip.longitude)
     if moved <= max(settle_radius, fix.accuracy):
-        trip = replace(trip, anchor_seen_at=now)
+        trip = _tighten(replace(trip, anchor_seen_at=now), place)
         # Still here. The anchor is deliberately NOT dragged towards the new
         # fix: letting it follow the noise lets a stay walk down the street a
         # few meters at a time and never trip the radius, which is how a moving
@@ -414,8 +460,8 @@ def follow(
 
     # Out of the anchor. Still the same place if the zone says so, or failing a
     # zone, if it is a step inside the one they had settled into.
-    if place is not None:
-        within_stay = trip.settled and place == was
+    if name is not None:
+        within_stay = trip.settled and name == was
     else:
         within_stay = (
             trip.settled
@@ -428,8 +474,14 @@ def follow(
         )
 
     if within_stay:
-        return replace(
-            trip, latitude=fix.latitude, longitude=fix.longitude, anchor_seen_at=now
+        return _tighten(
+            replace(
+                trip,
+                latitude=fix.latitude,
+                longitude=fix.longitude,
+                anchor_seen_at=now,
+            ),
+            place,
         )
 
     # They have left. A stay that was running is now a stay that happened, and
@@ -464,12 +516,60 @@ def follow(
         latitude=fix.latitude,
         longitude=fix.longitude,
         anchor_since=now,
+        anchor_place=name,
+        anchor_radius=place.radius if place else None,
         anchor_seen_at=now,
         settled_at=None,
         stay_latitude=None,
         stay_longitude=None,
-        stay_place=None,
         stays=(*trip.stays, finished) if finished else trip.stays,
+    )
+
+
+def _tighten(trip: Trip, place: Place | None) -> Trip:
+    """Let a fix that belongs to the current anchor narrow what it is called."""
+    if place is None:
+        return trip
+    if trip.anchor_radius is not None and place.radius >= trip.anchor_radius:
+        return trip
+    return replace(trip, anchor_place=place.name, anchor_radius=place.radius)
+
+
+def _turn(
+    trip: Trip,
+    fix: Fix,
+    place: Place | None,
+    from_home: float,
+    now: datetime,
+    turn_slack: float,
+) -> Trip:
+    """Keep the tightest named zone near the far end of the trip so far.
+
+    The window only ever moves outwards, because `furthest` only ever grows —
+    so a candidate that falls out of it is gone for good and there is nothing
+    to reconsider later. That is what makes this an O(1) running answer rather
+    than a list of every far fix: once they have driven past somewhere, it
+    stops being where they were heading.
+    """
+    floor = trip.furthest - turn_slack
+
+    if trip.turn_place is not None and trip.turn_distance < floor:
+        # They went further. Whatever named the old far end is now the road.
+        trip = replace(trip, turn_place=None, turn_radius=None)
+
+    if place is None or from_home < floor:
+        return trip
+    if trip.turn_radius is not None and place.radius >= trip.turn_radius:
+        return trip
+
+    return replace(
+        trip,
+        turn_place=place.name,
+        turn_radius=place.radius,
+        turn_distance=from_home,
+        turn_at=now,
+        turn_latitude=fix.latitude,
+        turn_longitude=fix.longitude,
     )
 
 
@@ -498,11 +598,10 @@ def _settle(trip: Trip, now: datetime, dwell: timedelta) -> Trip:
         settled_at=trip.anchor_since,
         stay_latitude=trip.latitude,
         stay_longitude=trip.longitude,
-        stay_place=trip.place,
     )
 
 
-_SCHEMA = 1
+_SCHEMA = 2
 
 
 def _moment(value: datetime | None) -> str | None:
@@ -536,6 +635,8 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
         "latitude": trip.latitude,
         "longitude": trip.longitude,
         "anchor_since": _moment(trip.anchor_since),
+        "anchor_place": trip.anchor_place,
+        "anchor_radius": trip.anchor_radius,
         "anchor_seen_at": _moment(trip.anchor_seen_at),
         "seen_at": _moment(trip.seen_at),
         "seen_latitude": trip.seen_latitude,
@@ -544,7 +645,6 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
         "settled_at": _moment(trip.settled_at),
         "stay_latitude": trip.stay_latitude,
         "stay_longitude": trip.stay_longitude,
-        "stay_place": trip.stay_place,
         "visits": [
             {
                 "place": visit.place,
@@ -564,10 +664,12 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
             for stay in trip.stays
         ],
         "furthest": trip.furthest,
-        "furthest_at": _moment(trip.furthest_at),
-        "furthest_latitude": trip.furthest_latitude,
-        "furthest_longitude": trip.furthest_longitude,
-        "furthest_place": trip.furthest_place,
+        "turn_place": trip.turn_place,
+        "turn_radius": trip.turn_radius,
+        "turn_distance": trip.turn_distance,
+        "turn_at": _moment(trip.turn_at),
+        "turn_latitude": trip.turn_latitude,
+        "turn_longitude": trip.turn_longitude,
         "ventured": trip.ventured,
     }
 
@@ -590,6 +692,8 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
             latitude=data["latitude"],
             longitude=data["longitude"],
             anchor_since=datetime.fromisoformat(data["anchor_since"]),
+            anchor_place=data.get("anchor_place"),
+            anchor_radius=data.get("anchor_radius"),
             anchor_seen_at=_read_moment(data.get("anchor_seen_at")),
             seen_at=datetime.fromisoformat(data["seen_at"]),
             seen_latitude=data.get("seen_latitude", 0.0),
@@ -598,7 +702,6 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
             settled_at=_read_moment(data.get("settled_at")),
             stay_latitude=data.get("stay_latitude"),
             stay_longitude=data.get("stay_longitude"),
-            stay_place=data.get("stay_place"),
             visits=tuple(
                 Visit(
                     place=visit["place"],
@@ -618,10 +721,12 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
                 for stay in data.get("stays", ())
             ),
             furthest=data.get("furthest", 0.0),
-            furthest_at=_read_moment(data.get("furthest_at")),
-            furthest_latitude=data.get("furthest_latitude"),
-            furthest_longitude=data.get("furthest_longitude"),
-            furthest_place=data.get("furthest_place"),
+            turn_place=data.get("turn_place"),
+            turn_radius=data.get("turn_radius"),
+            turn_distance=data.get("turn_distance", 0.0),
+            turn_at=_read_moment(data.get("turn_at")),
+            turn_latitude=data.get("turn_latitude"),
+            turn_longitude=data.get("turn_longitude"),
             ventured=data.get("ventured", False),
         )
     except (KeyError, TypeError, ValueError):

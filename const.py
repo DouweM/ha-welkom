@@ -77,6 +77,13 @@ TRIP_MIN = timedelta(minutes=2)
 # every journey anybody here has ever made; naming a trip after that one would
 # mean every trip ended in the same place.
 TRIP_COARSE_ZONE = 5000.0
+# How far back from a trip's furthest point a fix may be and still say where
+# they were heading. You reach a destination by driving towards it, so the
+# single furthest fix is usually the road just short of the gate: on
+# 2026-09-17 Gaby's school run turned at 779 m on the road and the fix inside
+# the 48 m school zone was 775 m out, nine seconds later. Four metres named the
+# whole journey "Lomas".
+TRIP_TURN_SLACK = 50.0
 
 FRONTEND_SCRIPT_URL = f"/{DOMAIN}/welkom-activity.js"
 FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script changes

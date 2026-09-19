@@ -588,7 +588,7 @@ class WelkomTripSensor(
             "longitude": trip.longitude,
             "distance": round(trip.distance_from(home)),
             "furthest": round(trip.furthest),
-            "turn": trip.furthest_place,
+            "turn": trip.turn_place,
             # Whether the phone has been quiet long enough that none of this is
             # current any more.
             "stale": stale(trip, now, TRIP_MAX_AGE),

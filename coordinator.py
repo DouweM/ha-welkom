@@ -34,6 +34,7 @@ from .const import (
     TRIP_PLACE_RADIUS,
     TRIP_SETTLE_RADIUS,
     TRIP_STILL_SPEED,
+    TRIP_TURN_SLACK,
     gps_tracker_entity_id,
 )
 from .location import Circle, Fix, distance
@@ -47,7 +48,7 @@ from .models import (
     Role,
     Room,
 )
-from .trip import Trip, follow, stale
+from .trip import Place, Trip, follow, stale
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -524,6 +525,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             dwell=TRIP_DWELL,
             away_floor=TRIP_AWAY_FLOOR,
             still_speed=TRIP_STILL_SPEED,
+            turn_slack=TRIP_TURN_SLACK,
         )
         if after is not None:
             self._trips[person_id] = after
@@ -560,6 +562,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 dwell=TRIP_DWELL,
                 away_floor=TRIP_AWAY_FLOOR,
                 still_speed=TRIP_STILL_SPEED,
+                turn_slack=TRIP_TURN_SLACK,
             )
             if advanced is not None and advanced != trip:
                 self._trips[person_id] = advanced
@@ -585,8 +588,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             radius=zone_attrs.get("radius") or 0,
         )
 
-    def place_at(self, fix: Fix) -> str | None:
-        """The name of the smallest zone the fix is in, if any.
+    def place_at(self, fix: Fix) -> Place | None:
+        """The smallest zone the fix is in, if any.
 
         Smallest because zones nest: a park sits inside a borough sits inside
         the city, and the useful name is the tightest one. By NAME, because
@@ -599,7 +602,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         Passive zones are skipped for the reason Home Assistant skips them: the
         twelve five-metre room zones are welkom's business, not a trip's.
         """
-        best: str | None = None
+        best: Place | None = None
         best_radius = TRIP_COARSE_ZONE
         for zone_entity_id in self.hass.data.get(DATA_ZONE_ENTITY_IDS, ()):
             if zone_entity_id == ENTITY_ID_HOME:
@@ -622,7 +625,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             if distance(
                 fix.latitude, fix.longitude, latitude, longitude
             ) - radius < max(fix.accuracy, 1):
-                best, best_radius = zone.name, radius
+                best = Place(name=zone.name, radius=radius)
+                best_radius = radius
 
         return best
 

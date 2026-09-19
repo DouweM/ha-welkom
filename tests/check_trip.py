@@ -56,6 +56,7 @@ AWAY_FLOOR = 250.0
 COARSE = 5000.0
 MIN_TRIP = timedelta(minutes=2)
 STILL_SPEED = 1.4
+TURN_SLACK = 50.0
 
 T0 = datetime(2026, 9, 12, 9, 29, tzinfo=UTC)
 
@@ -67,18 +68,21 @@ def check(label: str, got: object, want: object) -> None:
         sys.exit(1)
 
 
-def step(trip, fix, at: float, place: str | None = None):
+def step(trip, fix, at: float, place: str | None = None, radius: float = 100.0):
+    """`place` is given as a bare name here; the module wants its size too, and
+    only the replays at the bottom care what that size is."""
     return follow(
         trip,
         fix,
         HOME,
         T0 + timedelta(seconds=at),
-        place=place,
+        place=trip_mod.Place(name=place, radius=radius) if place else None,
         settle_radius=SETTLE_RADIUS,
         place_radius=PLACE_RADIUS,
         dwell=DWELL,
         away_floor=AWAY_FLOOR,
         still_speed=STILL_SPEED,
+        turn_slack=TURN_SLACK,
     )
 
 
@@ -200,9 +204,9 @@ check(
 )
 
 # --- the itinerary -----------------------------------------------------------
-route = step(None, at(800), 0, "Lomas")
-route = step(route, at(900), 60, "School")  # the turn: brief, and furthest out
-route = step(route, at(850), 120, "Lomas")
+route = step(None, at(800), 0, "Lomas", 1006)
+route = step(route, at(900), 60, "School", 48)  # the turn: brief, and tight
+route = step(route, at(850), 120, "Lomas", 1006)
 route = step(route, at(300), 180)
 check(
     "a brief turn counts, and the long road through does not",
@@ -240,7 +244,7 @@ ZONES = [
 ]
 
 
-def place_of(latitude: float, longitude: float, accuracy: float) -> str | None:
+def place_of(latitude: float, longitude: float, accuracy: float):
     """The smallest zone the fix is in, by Home Assistant's own overlap rule.
 
     `COARSE` drops the ones too big to be a destination: `zone.mexico_city` is
@@ -254,7 +258,7 @@ def place_of(latitude: float, longitude: float, accuracy: float) -> str | None:
         if location.distance(latitude, longitude, zone_lat, zone_lon) - radius < max(
             accuracy, 1
         ):
-            best, best_radius = name, radius
+            best, best_radius = trip_mod.Place(name=name, radius=radius), radius
     return best
 
 
@@ -268,11 +272,13 @@ def replay(fixes) -> Any:
             clock += 30
             trip = step(trip, None, clock)
         clock = offset
+        found = place_of(latitude, longitude, accuracy)
         trip = step(
             trip,
             Fix(latitude=latitude, longitude=longitude, accuracy=accuracy),
             offset,
-            place_of(latitude, longitude, accuracy),
+            found.name if found else None,
+            found.radius if found else 100.0,
         )
     assert trip is not None
     return trip
@@ -321,7 +327,7 @@ check(
     been(chapu),
     ("Puente", "Chapu II"),
 )
-check("...and the turn was in the park", chapu.furthest_place, "Chapu II")
+check("...and the turn was in the park", chapu.turn_place, "Chapu II")
 check("...about 400m out", 380 <= chapu.furthest <= 430, True)
 
 # Gaby, Mon 2026-09-07 12:53-13:18: drive to school, drop off, drive back. The
@@ -379,6 +385,42 @@ EVENING_AT_THE_PUENTE = [
     (1103, 19.419515, -99.205892, 14.0),
 ]
 
+# Gaby, Thu 2026-09-17 08:53-09:06: the same school run as above, a week later,
+# and the one the first turn rule got wrong. She turned at 779 m out on the road
+# and the fix inside the 48 m school zone came nine seconds later at 775 m, so
+# the single furthest fix named the whole journey after the one-kilometre zone
+# she was driving through. Both are within `turn_slack` of the far end; the
+# tighter one is what she meant.
+SCHOOL_RUN_0917 = [
+    (0, 19.419153, -99.206473, 5.0),
+    (9, 19.419255, -99.206715, 5.0),
+    (15, 19.41932, -99.206955, 5.0),
+    (24, 19.419418, -99.207183, 5.0),
+    (35, 19.41948, -99.20737, 5.0),
+    (45, 19.419564, -99.207535, 5.0),
+    (61, 19.419995, -99.207717, 12.9),
+    (117, 19.418777, -99.210589, 5.0),
+    (213, 19.421829, -99.212337, 5.0),
+    (222, 19.421624, -99.212772, 5.0),
+    (231, 19.421372, -99.212826, 5.0),
+    (431, 19.420893, -99.212005, 5.0),
+    (436, 19.420979, -99.211742, 5.0),
+    (449, 19.421152, -99.211238, 5.0),
+    (555, 19.422296, -99.207605, 5.0),
+    (574, 19.422326, -99.207513, 5.0),
+    (708, 19.421172, -99.205666, 5.0),
+    (750, 19.41991, -99.205922, 5.0),
+    (752, 19.419795, -99.205911, 5.0),
+    (756, 19.419706, -99.20595, 5.0),
+    (766, 19.419513, -99.205926, 5.0),
+]
+
+sept17 = replay(SCHOOL_RUN_0917)
+check("the 09-17 school run turns at the school", sept17.turn_place, "School")
+check("...and says so", been(sept17), ("School",))
+check("...not the neighbourhood it drove through", "Lomas" in been(sept17), False)
+
+
 puente = replay(EVENING_AT_THE_PUENTE)
 check("the evening walk went to the bridge", "Puente" in been(puente), True)
 check("...which is inside the away floor", puente.furthest < AWAY_FLOOR, True)
@@ -399,7 +441,7 @@ check(
     [stay.place for stay in read_back.stays],
     ["Puente", "Chapu II"],
 )
-check("...and the turn it got to", read_back.furthest_place, "Chapu II")
+check("...and the turn it got to", read_back.turn_place, "Chapu II")
 check(
     "what was written is really JSON",
     json.loads(json.dumps(written)) == written,
