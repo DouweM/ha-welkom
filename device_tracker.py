@@ -361,12 +361,19 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         if self._gps_entity_id is not None and isinstance(
             self.coordinator_context, str
         ):
-            self.coordinator.observe(
-                self.coordinator_context,
-                None if (data and use_welkom) else fix,
-                now,
-                geocode,
-            )
+            if data and use_welkom:
+                # welkom has them: they are home and any trip is over.
+                self.coordinator.observe(self.coordinator_context, None, now, geocode)
+            elif fix:
+                self.coordinator.observe(self.coordinator_context, fix, now, geocode)
+            # And when NEITHER speaks, nothing is said at all. Silence from
+            # both sources is not evidence of being home, and it used to be
+            # read as exactly that: `None if (data and use_welkom) else fix`
+            # hands `None` over when the phone entity blinks unavailable, so a
+            # two-second gap ended the journey. On 2026-09-20 at 05:56:55
+            # Gaby's phone went quiet for two seconds while she was 7 km away
+            # and her evening's itinerary was declared over. `stale` is what
+            # covers a phone that never comes back.
 
         if data and use_welkom:
             self._source = "welkom"
