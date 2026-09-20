@@ -23,7 +23,7 @@ from homeassistant.const import (
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.util import slugify
+from homeassistant.util import dt as dt_util, slugify
 
 from .client import WelkomClient
 from .const import (
@@ -482,8 +482,25 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         Nothing is claimed until the tracker next says the person is out. Until
         then the sensor reads `home`, which is the honest answer: welkom has
         not spoken yet, and a restart is not evidence about where anybody is.
+
+        Unless the tracker already has -- and that case is not rare, it is the
+        usual one. The tracker's `async_added_to_hass` folds the phone's fix in
+        as soon as it has a state machine to read, and when that runs before
+        this does, the fix has already started a NEW trip, timestamped at the
+        restart, with an empty itinerary. On 2026-09-20 Gaby's evening out --
+        two stops, an hour and a half -- became a trip that began at 02:29:46,
+        and the door would have had nothing to say when she got home. A trip
+        that began after the remembered one last spoke is that artefact, not a
+        new journey, and the remembered one carries on in its place.
         """
-        self._remembered[person_id] = trip
+        live = self._trips.get(person_id)
+        if live is None:
+            self._remembered[person_id] = trip
+            return
+        now = dt_util.utcnow()
+        if live.left_at >= trip.seen_at and not stale(trip, now, TRIP_MAX_AGE):
+            self._trips[person_id] = trip
+            self._notify_trips()
 
     @callback
     def observe(
