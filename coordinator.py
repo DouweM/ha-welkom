@@ -542,6 +542,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                     dwell=TRIP_DWELL,
                     min_trip=TRIP_MIN,
                     away_floor=TRIP_AWAY_FLOOR,
+                    still_speed=TRIP_STILL_SPEED,
                 ):
                     self._ended[person_id] = (over, now)
                 self._seen.pop(person_id, None)

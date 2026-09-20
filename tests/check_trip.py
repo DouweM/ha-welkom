@@ -91,7 +91,11 @@ def been(trip) -> tuple[str | None, ...]:
     return tuple(
         stay.place
         for stay in trip.been_to(
-            HOME, dwell=DWELL, min_trip=MIN_TRIP, away_floor=AWAY_FLOOR
+            HOME,
+            dwell=DWELL,
+            min_trip=MIN_TRIP,
+            away_floor=AWAY_FLOOR,
+            still_speed=STILL_SPEED,
         )
     )
 
@@ -490,5 +494,45 @@ check(
     carried.left_at,
     parked.left_at,
 )
+
+
+# --- a zone crossed at speed is the road, not a visit ------------------------
+# Lomas is a kilometre across and a car is through it in three minutes. Before
+# the pace test, five minutes of driving anywhere inside a named zone reported
+# having BEEN there -- which is how a school run in traffic came home saying
+# "Lomas". A walk through the same ground at the same length is a visit.
+def _crossing(speed_ms: float, place: str = "Lomas") -> object:
+    """A trip that spends six minutes inside one named zone at `speed_ms`."""
+    start = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+    trip = None
+    metres = 0.0
+    # Seven minutes inside the zone, then on past it -- so the FAR end of the
+    # trip has no name and the turn cannot put the zone back on the list. A
+    # journey that ends in Lomas has been to Lomas whatever its speed; this is
+    # about one that only passes through.
+    for step in range(12):
+        now = start + timedelta(minutes=step)
+        metres += speed_ms * 60
+        inside = step < 7
+        trip = follow(
+            trip,
+            at(2000 + metres + (0 if inside else 4000), accuracy=5.0),
+            HOME,
+            now,
+            place=trip_mod.Place(name=place, radius=1000.0) if inside else None,
+            settle_radius=SETTLE_RADIUS,
+            place_radius=PLACE_RADIUS,
+            dwell=DWELL,
+            away_floor=AWAY_FLOOR,
+            still_speed=STILL_SPEED,
+            turn_slack=TURN_SLACK,
+        )
+    return trip
+
+
+walked = _crossing(1.0)
+check("six minutes walked through a zone is a visit", been(walked), ("Lomas",))
+driven = _crossing(8.0)
+check("six minutes driven through the same zone is not", been(driven), ())
 
 print("all trip checks passed")

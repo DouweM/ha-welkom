@@ -79,10 +79,39 @@ class Visit:
     since: datetime
     until: datetime
 
+    latitude: float = 0.0
+    longitude: float = 0.0
+    """Where the visit began."""
+
+    end_latitude: float = 0.0
+    end_longitude: float = 0.0
+    """And where it had got to, so `speed` can tell being somewhere from
+    driving through it."""
+
     @property
     def duration(self) -> timedelta:
         """How long they were in it."""
         return self.until - self.since
+
+    @property
+    def speed(self) -> float:
+        """How fast they crossed the zone, in metres per second.
+
+        Net displacement over time, not distance covered, which is the point:
+        somebody wandering a park for ten minutes ends up near where they
+        started however far they walked, and somebody driving through a
+        neighbourhood does not. A visit with no duration reads as standing
+        still, which is what a single fix inside a zone is.
+        """
+        seconds = self.duration.total_seconds()
+        if seconds <= 0:
+            return 0.0
+        return (
+            distance(
+                self.latitude, self.longitude, self.end_latitude, self.end_longitude
+            )
+            / seconds
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -271,6 +300,7 @@ class Trip:
         dwell: timedelta,
         min_trip: timedelta,
         away_floor: float,
+        still_speed: float,
     ) -> tuple[Stay, ...]:
         """Everywhere this trip amounts to, in the order it happened.
 
@@ -283,9 +313,16 @@ class Trip:
                           anybody drew, and a list that could only say zone
                           names would report the neighbourhood she drove home
                           through instead of where she spent three hours.
-        the long visits — a named zone that held them for `dwell` without the
-                          anchor ever settling, which is what wandering around
-                          a park looks like.
+        the long visits — a named zone that held them for `dwell` at walking
+                          pace or slower, without the anchor ever settling,
+                          which is what wandering around a park looks like.
+                          The pace is the whole of the rule: sitting inside a
+                          zone for five minutes is being there and crossing
+                          one in five minutes is the road, and the same
+                          neighbourhood can be either on the same afternoon.
+                          Lomas is 1 km across and a car is through it in
+                          three minutes, so without this every drive out of
+                          the house reported having been to Lomas.
         the turn        — the named zone at the furthest point. A school run
                           has no stay and no long visit: she pulls up, the kid
                           gets out, she drives away, and the six seconds she
@@ -298,6 +335,12 @@ class Trip:
         said nothing for eight minutes while he crossed to Chapultepec, and
         stretching the visit over that silence put "the bridge" on a list that
         should only have said "the park".
+
+        Only the STAYS are asked how long: a stay is already stationary by
+        construction — 150 m for five minutes is half a metre a second — so
+        the question there is only whether it happened, not how fast. The
+        other two are moments, and the turn is allowed to be one: a school run
+        pulls up for six seconds and that is the journey.
 
         `away_floor` applies to the unnamed ones only, and for the same reason
         it applies to `arrived`: an unnamed spot near the house is the doorstep.
@@ -324,7 +367,7 @@ class Trip:
                 until=visit.until,
             )
             for visit in self.visits
-            if visit.duration >= dwell
+            if visit.duration >= dwell and visit.speed <= still_speed
         )
         if turn := self.turn:
             found.append(turn)
@@ -408,7 +451,21 @@ def follow(
             seen_latitude=fix.latitude,
             seen_longitude=fix.longitude,
             place=name,
-            visits=(Visit(place=name, since=now, until=now),) if name else (),
+            visits=(
+                (
+                    Visit(
+                        place=name,
+                        since=now,
+                        until=now,
+                        latitude=fix.latitude,
+                        longitude=fix.longitude,
+                        end_latitude=fix.latitude,
+                        end_longitude=fix.longitude,
+                    ),
+                )
+                if name
+                else ()
+            ),
             furthest=from_home,
             turn_place=name,
             turn_radius=place.radius if place else None,
@@ -443,7 +500,7 @@ def follow(
         seen_latitude=fix.latitude,
         seen_longitude=fix.longitude,
         place=name,
-        visits=_visited(trip.visits, name, now),
+        visits=_visited(trip.visits, name, fix, now),
         ventured=trip.ventured or from_home >= away_floor,
         furthest=max(trip.furthest, from_home),
     )
@@ -574,19 +631,41 @@ def _turn(
 
 
 def _visited(
-    visits: tuple[Visit, ...], place: str | None, now: datetime
+    visits: tuple[Visit, ...], place: str | None, fix: Fix, now: datetime
 ) -> tuple[Visit, ...]:
     """Extend the open visit, or open a new one when the place changes.
 
     Leaving a zone for open ground closes the visit without opening another:
     the gaps between named places are the road, and the road has no name worth
     keeping.
+
+    The fix travels with the visit so that `Visit.speed` can be asked later
+    whether this was being somewhere or driving through it.
     """
     if place is None:
         return visits
     if visits and visits[-1].place == place:
-        return (*visits[:-1], replace(visits[-1], until=now))
-    return (*visits, Visit(place=place, since=now, until=now))
+        return (
+            *visits[:-1],
+            replace(
+                visits[-1],
+                until=now,
+                end_latitude=fix.latitude,
+                end_longitude=fix.longitude,
+            ),
+        )
+    return (
+        *visits,
+        Visit(
+            place=place,
+            since=now,
+            until=now,
+            latitude=fix.latitude,
+            longitude=fix.longitude,
+            end_latitude=fix.latitude,
+            end_longitude=fix.longitude,
+        ),
+    )
 
 
 def _settle(trip: Trip, now: datetime, dwell: timedelta) -> Trip:
@@ -650,6 +729,10 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
                 "place": visit.place,
                 "since": _moment(visit.since),
                 "until": _moment(visit.until),
+                "latitude": visit.latitude,
+                "longitude": visit.longitude,
+                "end_latitude": visit.end_latitude,
+                "end_longitude": visit.end_longitude,
             }
             for visit in trip.visits
         ],
@@ -707,6 +790,15 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
                     place=visit["place"],
                     since=datetime.fromisoformat(visit["since"]),
                     until=datetime.fromisoformat(visit["until"]),
+                    # Absent in anything written before visits carried a
+                    # pace. Zero reads as standing still, which is what the
+                    # rule assumed until now, so a trip carried across the
+                    # upgrade keeps the answer it already had rather than
+                    # being thrown away for a version bump.
+                    latitude=visit.get("latitude", 0.0),
+                    longitude=visit.get("longitude", 0.0),
+                    end_latitude=visit.get("end_latitude", 0.0),
+                    end_longitude=visit.get("end_longitude", 0.0),
                 )
                 for visit in data.get("visits", ())
             ),

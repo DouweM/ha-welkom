@@ -31,6 +31,7 @@ from .const import (
     TRIP_DWELL,
     TRIP_MAX_AGE,
     TRIP_MIN,
+    TRIP_STILL_SPEED,
 )
 from .coordinator import (
     DeviceData,
@@ -474,7 +475,11 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
 def _itinerary(trip: Trip, home: Circle) -> dict[str, Any]:
     """`places` and `been_to`, the same way whether the trip is live or over."""
     been_to = trip.been_to(
-        home, dwell=TRIP_DWELL, min_trip=TRIP_MIN, away_floor=TRIP_AWAY_FLOOR
+        home,
+        dwell=TRIP_DWELL,
+        min_trip=TRIP_MIN,
+        away_floor=TRIP_AWAY_FLOOR,
+        still_speed=TRIP_STILL_SPEED,
     )
     return {
         "places": [stay.place for stay in been_to],
