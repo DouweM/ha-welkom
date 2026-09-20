@@ -31,6 +31,7 @@ from .const import (
     TRIP_COARSE_ZONE,
     TRIP_DWELL,
     TRIP_MAX_AGE,
+    TRIP_MIN,
     TRIP_PLACE_RADIUS,
     TRIP_SETTLE_RADIUS,
     TRIP_STILL_SPEED,
@@ -499,7 +500,22 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             # they may well have walked in while Home Assistant was down.
             self._remembered.pop(person_id, None)
             if (over := self._trips.pop(person_id, None)) is not None:
-                self._ended[person_id] = (over, now)
+                # Remembered only if it amounted to anything. welkom losing
+                # the phone for five minutes hands the position to GPS and
+                # back, and that is a trip by this module's definition -- but
+                # it went nowhere, and letting it replace the afternoon out
+                # would make "arriving from School" unsayable at the door ten
+                # minutes later. `been_to` is already the judge of whether a
+                # trip happened; a trip it has nothing to say about does not
+                # displace one it did.
+                home = self.home_circle
+                if home is None or over.been_to(
+                    home,
+                    dwell=TRIP_DWELL,
+                    min_trip=TRIP_MIN,
+                    away_floor=TRIP_AWAY_FLOOR,
+                ):
+                    self._ended[person_id] = (over, now)
                 self._seen.pop(person_id, None)
                 self._notify_trips()
             return
