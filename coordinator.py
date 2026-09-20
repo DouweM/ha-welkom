@@ -167,6 +167,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # Trips carried over a restart, waiting for the tracker to say whether
         # they are still happening — see `restore_trip`.
         self._remembered: dict[str, Trip] = {}
+        # The last trip each person finished, and when — see `last_trip`.
+        self._ended: dict[str, tuple[Trip, datetime]] = {}
         # Told separately from the coordinator's own listeners, and that is not
         # tidiness. `observe` is called BY a listener — the person's tracker,
         # deciding whose evidence won — so telling the coordinator's listeners
@@ -442,6 +444,23 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         """The journey this person is on, or None while they are home."""
         return self._trips.get(person_id)
 
+    def last_trip(self, person_id: str) -> tuple[Trip, datetime] | None:
+        """The trip this person most recently finished, and when they got home.
+
+        Kept because the moment anybody wants to say where somebody has been is
+        the moment they walk back in — and by then `trip` says None. The front
+        door's card is written as the bolt moves, seconds after welkom has the
+        phone back; "arriving from School" can only be said if the finished
+        trip is still readable then.
+
+        Not carried across a restart, on purpose. `extra_restore_state_data`
+        hands back only what was still running, and a finished trip resurrected
+        into a house that has since had a night's sleep would name yesterday's
+        errand on today's door. The cost of forgetting is a card that says
+        "arriving" without "from"; the cost of misremembering is one that lies.
+        """
+        return self._ended.get(person_id)
+
     @callback
     def restore_trip(self, person_id: str, trip: Trip) -> None:
         """Take back a trip that outlived a restart, to be continued or dropped.
@@ -479,7 +498,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             # Home. Whatever was remembered across the restart is over too —
             # they may well have walked in while Home Assistant was down.
             self._remembered.pop(person_id, None)
-            if self._trips.pop(person_id, None) is not None:
+            if (over := self._trips.pop(person_id, None)) is not None:
+                self._ended[person_id] = (over, now)
                 self._seen.pop(person_id, None)
                 self._notify_trips()
             return

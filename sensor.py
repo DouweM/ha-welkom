@@ -40,8 +40,9 @@ from .coordinator import (
     WelkomCoordinator,
     WelkomData,
 )
+from .location import Circle
 from .models import Activity
-from .trip import stale, trip_as_dict, trip_from_dict
+from .trip import Trip, stale, trip_as_dict, trip_from_dict
 
 NUMBER_PARAMS = {
     "state_class": SensorStateClass.MEASUREMENT,
@@ -470,6 +471,27 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
         self.async_write_ha_state()
 
 
+def _itinerary(trip: Trip, home: Circle) -> dict[str, Any]:
+    """`places` and `been_to`, the same way whether the trip is live or over."""
+    been_to = trip.been_to(
+        home, dwell=TRIP_DWELL, min_trip=TRIP_MIN, away_floor=TRIP_AWAY_FLOOR
+    )
+    return {
+        "places": [stay.place for stay in been_to],
+        "been_to": [
+            {
+                "place": stay.place,
+                "latitude": stay.latitude,
+                "longitude": stay.longitude,
+                "since": stay.since,
+                "until": stay.until,
+                "minutes": round(stay.duration.total_seconds() / 60),
+            }
+            for stay in been_to
+        ],
+    }
+
+
 class WelkomTripSensor(
     CoordinatorEntity[WelkomCoordinator], RestoreEntity, SensorEntity
 ):
@@ -565,21 +587,31 @@ class WelkomTripSensor(
     def _async_update_attrs(self) -> None:
         """Update the attributes of the entity."""
 
-        trip = self.coordinator.trip(cast(str, self.coordinator_context))
+        person_id = cast(str, self.coordinator_context)
+        trip = self.coordinator.trip(person_id)
         home = self.coordinator.home_circle
 
         if trip is None or home is None:
             self._attr_native_value = "home"
             self._attr_extra_state_attributes = {}
+            # Home, but the last trip is still worth describing: the card that
+            # says "arriving from School" is written as the front door opens,
+            # which is after welkom has the phone back and the trip is over.
+            # Only the itinerary and its two ends -- nothing that describes a
+            # position, because there is no position any more.
+            if home is not None and (ended := self.coordinator.last_trip(person_id)):
+                over, returned_at = ended
+                self._attr_extra_state_attributes = {
+                    "left_at": over.left_at,
+                    "returned_at": returned_at,
+                    **_itinerary(over, home),
+                }
             return
 
         now = dt_util.utcnow()
         arrived = trip.arrived(home, TRIP_AWAY_FLOOR)
         self._attr_native_value = "settled" if arrived else "travelling"
 
-        been_to = trip.been_to(
-            home, dwell=TRIP_DWELL, min_trip=TRIP_MIN, away_floor=TRIP_AWAY_FLOOR
-        )
         self._attr_extra_state_attributes = {
             "left_at": trip.left_at,
             "settled_at": trip.settled_at if arrived else None,
@@ -593,18 +625,7 @@ class WelkomTripSensor(
             # current any more.
             "stale": stale(trip, now, TRIP_MAX_AGE),
             "seen_at": trip.seen_at,
-            "places": [stay.place for stay in been_to],
-            "been_to": [
-                {
-                    "place": stay.place,
-                    "latitude": stay.latitude,
-                    "longitude": stay.longitude,
-                    "since": stay.since,
-                    "until": stay.until,
-                    "minutes": round(stay.duration.total_seconds() / 60),
-                }
-                for stay in been_to
-            ],
+            **_itinerary(trip, home),
         }
 
     @callback
