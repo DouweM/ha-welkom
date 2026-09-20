@@ -609,6 +609,12 @@ class WelkomTripSensor(
                 self._attr_extra_state_attributes = {
                     "left_at": over.left_at,
                     "returned_at": returned_at,
+                    # How far it ever got, which is what tells a day out of
+                    # town from an errand after the fact. Nothing else here
+                    # describes a position any more, but this describes the
+                    # journey's shape, and the card written as they walk back
+                    # in has to know which kind of trip it is summarising.
+                    "furthest": round(over.furthest),
                     **_itinerary(over, home),
                 }
             return
