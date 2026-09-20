@@ -243,6 +243,17 @@ class Home(Area):
 
         mdi_icon: str | None = None
 
+        class HomeAssistant(BaseModel):
+            """Hints for this integration, set on the home in welkom.yml."""
+
+            places: list[Any] = []
+            """Places the household recognises that no circle describes — a
+            name plus `geocodes_as` matchers and/or a `polygon`. Kept raw here
+            and read tolerantly by `places.places_from_config`, so a typo in
+            one entry costs that entry and not the home."""
+
+        homeassistant: HomeAssistant = HomeAssistant()
+
     attrs: Attrs = Attrs()
 
     @computed_field

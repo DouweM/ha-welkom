@@ -30,6 +30,8 @@ Welkom only knows the network, so on its own a person is either in a room or `no
 - **Brief dropouts hold the room.** An idle phone goes quiet on WiFi for minutes at a time and the controller ages it out, so welkom loses a person who hasn't moved. The tracker keeps welkom's last room for up to 5 minutes as long as the phone's fix stays within the home (`held: true` while it does), instead of dropping to a bare `home`. Only for a person who never left in the meantime: once the phone has taken charge, the room they were last seen in is history, not a place to snap back to.
 - **Welkom outage:** the tracker stays available, holding welkom's last placement while the phone's fix remains within the home and following the phone otherwise. (Without a phone it goes `unavailable`, so `person.*` holds its last state.)
 
+While the phone is in charge, the tracker's state is the tightest place that holds — a zone, or one of the household's own [places](#places) — so `person.*` can read "Roma" without a zone being drawn.
+
 Link **only** this tracker to the Home Assistant person. Listing the phone tracker alongside it makes HA's person entity pick whichever wrote last, which is the race this merge exists to end. `binary_sensor.<person>` stays welkom's pure network view; the `source` attribute on the tracker says whether `welkom` or `gps` is speaking, and `held` whether welkom's placement is being kept through a dropout.
 
 ### Trips
@@ -49,6 +51,32 @@ A few rules fall out of that, each of which exists because the naive version get
 Nothing here is named beyond the zone: an unnamed stop carries only coordinates, and turning that into "La Roma, CDMX" needs a geocoder this integration has no business owning. Compose the sentence from `been_to` in a template or an automation, where the words belong.
 
 Room zones in HA are best made **passive** (a few metres around each room's spot, inside the home zone): the tracker names rooms from welkom's placement, and passive zones keep a phone's jittery GPS from ever claiming one.
+
+### Places
+
+Zones are circles, and most places people mean are not: a park with three named sections, a neighbourhood, a town. The phone's reverse geocoder already knows those boundaries, so a household can name places by what the geocode says there, or by a hand-drawn polygon, in `attrs.homeassistant.places` on the home in welkom.yml:
+
+```yaml
+homes:
+- id: oasis
+  attrs:
+    homeassistant:
+      places:
+      - name: Chapu II
+        geocodes_as: {sub_locality: Bosque de Chapultepec II}
+      - name: Roma
+        geocodes_as: {sub_locality: [Roma Norte, Roma Sur]}
+      - name: Satélite            # all keys must hold
+        geocodes_as: {sub_locality: Ciudad Satélite, locality: Naucalpan de Juárez}
+      - name: Polanco             # any of several matchers
+        geocodes_as: [{sub_locality: Polanco}, {area_of_interest: Parque Lincoln}]
+      - name: Molino
+        polygon: [[19.4238, -99.2052], [19.4224, -99.2038], [19.4222, -99.2058]]
+```
+
+The geocode comes from the companion app's *Geocoded Location* sensor, found on the same device as the person's phone tracker; attributes are `area_of_interest`, `thoroughfare`, `sub_locality`, `postal_code`, `locality`, `sub_administrative_area`, `administrative_area`, `country`, matched case-insensitively. A geocode is only trusted when its own position agrees with the fix, so a sensor a poll behind can't name the street the phone just left.
+
+Configured places take part in the same "tightest zone wins" rule as real zones. A polygon is worth the radius of the circle with its area; a geocode match is worth a nominal radius for the attribute (an area of interest is tighter than a sub-locality is tighter than a locality). So a 48 m school circle still beats the neighbourhood around it, and a real zone drawn smaller always wins. The name reaches three things at once: the tracker's state (and so `person.*` and any badge reading it), the trip sensor's stops and turns, and whatever composes sentences from either. Draw a small **passive** zone with the same name if you want an icon for it on the map — HA counts people in a zone by matching the person's state to the zone's name, and passive means the circle never claims anybody by geometry.
 
 ### Freshness
 

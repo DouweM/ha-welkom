@@ -49,6 +49,7 @@ from .models import (
     Role,
     Room,
 )
+from .places import Geocode, PlaceSpec, places_from_config, recognise
 from .trip import Place, Trip, follow, stale
 
 _LOGGER = logging.getLogger(__name__)
@@ -170,6 +171,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         self._remembered: dict[str, Trip] = {}
         # The last trip each person finished, and when — see `last_trip`.
         self._ended: dict[str, tuple[Trip, datetime]] = {}
+        # The household's configured places, read on first use — see `places`.
+        self._places: tuple[PlaceSpec, ...] | None = None
         # Told separately from the coordinator's own listeners, and that is not
         # tidiness. `observe` is called BY a listener — the person's tracker,
         # deciding whose evidence won — so telling the coordinator's listeners
@@ -483,7 +486,13 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         self._remembered[person_id] = trip
 
     @callback
-    def observe(self, person_id: str, fix: Fix | None, now: datetime) -> None:
+    def observe(
+        self,
+        person_id: str,
+        fix: Fix | None,
+        now: datetime,
+        geocode: Geocode | None = None,
+    ) -> None:
         """Fold what the person's tracker just decided into their trip.
 
         Called by `device_tracker.WelkomTracker` rather than read from the
@@ -493,7 +502,9 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         never disagree about whether somebody is out.
 
         `fix` is None when welkom has them — they are home, and any trip is
-        over.
+        over. `geocode` is what the phone's reverse geocoder said about the
+        fix, if the tracker has one that describes it; it is how a stop in a
+        neighbourhood the household named gets that name.
         """
         if fix is None:
             # Home. Whatever was remembered across the restart is over too —
@@ -555,7 +566,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             fix,
             home,
             now,
-            place=self.place_at(fix),
+            place=self.place_at(fix, geocode),
             settle_radius=TRIP_SETTLE_RADIUS,
             place_radius=TRIP_PLACE_RADIUS,
             dwell=TRIP_DWELL,
@@ -624,8 +635,29 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             radius=zone_attrs.get("radius") or 0,
         )
 
-    def place_at(self, fix: Fix) -> Place | None:
-        """The smallest zone the fix is in, if any.
+    @property
+    def places(self) -> tuple[PlaceSpec, ...]:
+        """The household's own places, from the home's `attrs.homeassistant`.
+
+        Read once: homes are fetched at setup and a reload is how config
+        changes arrive, the same as for the images.
+        """
+        if self._places is None:
+            try:
+                raw = self.home.attrs.homeassistant.places
+            except ValueError:
+                raw = []
+            self._places = places_from_config(raw)
+        return self._places
+
+    def place_at(
+        self,
+        fix: Fix,
+        geocode: Geocode | None = None,
+        *,
+        coarse: float = TRIP_COARSE_ZONE,
+    ) -> Place | None:
+        """The tightest place the fix is in, if any: a zone, or one of ours.
 
         Smallest because zones nest: a park sits inside a borough sits inside
         the city, and the useful name is the tightest one. By NAME, because
@@ -636,10 +668,18 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         Home Assistant's own overlap rule, so a vague fix at the kerb outside
         a 48 m school zone is in it, the same way it would be for any tracker.
         Passive zones are skipped for the reason Home Assistant skips them: the
-        twelve five-metre room zones are welkom's business, not a trip's.
+        twelve five-metre room zones are welkom's business, not a trip's — and
+        the marker circles that stand for a geocoded place on the map must not
+        claim anybody by geometry.
+
+        The household's configured places compete on the same radius — see
+        `places.recognise` — so a polygon or a geocoded neighbourhood only ever
+        wins by being tighter than the best real circle. `coarse` is the radius
+        nothing may reach: a trip ignores the zone drawn around the whole city,
+        while a tracker naming its state wants it as the last resort.
         """
         best: Place | None = None
-        best_radius = TRIP_COARSE_ZONE
+        best_radius = coarse
         for zone_entity_id in self.hass.data.get(DATA_ZONE_ENTITY_IDS, ()):
             if zone_entity_id == ENTITY_ID_HOME:
                 continue
@@ -664,7 +704,14 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 best = Place(name=zone.name, radius=radius)
                 best_radius = radius
 
-        return best
+        ours = recognise(
+            self.places,
+            latitude=fix.latitude,
+            longitude=fix.longitude,
+            geocode=geocode,
+            tighter_than=best_radius,
+        )
+        return ours or best
 
     def gps_tracker(self, person_id: str) -> str | None:
         """The device_tracker carrying this person's phone GPS, if configured."""

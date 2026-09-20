@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+import math
 from typing import Any
 
 from homeassistant.components.device_tracker import (
@@ -19,6 +20,7 @@ from homeassistant.const import (
     EntityCategory,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -27,10 +29,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .client import WelkomClient
-from .const import DOMAIN, GPS_MAX_AGE, WELKOM_HOLD
+from .const import DOMAIN, GEOCODE_SLACK, GPS_MAX_AGE, WELKOM_HOLD
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
 from .location import Circle, Fix, placement_holds, placement_lingers
 from .models import Person
+from .places import Geocode
 
 
 async def async_setup_entry(
@@ -176,6 +179,9 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         self._attr_entity_picture = entity_description.entity_picture
 
         self._gps_entity_id = gps_entity_id
+        # The phone's reverse-geocode sensor, found beside the tracker on its
+        # device once there is a registry to ask — see `async_added_to_hass`.
+        self._geocode_entity_id: str | None = None
         # Which evidence the current state rests on: "welkom" or "gps" (only
         # meaningful when a phone is configured), None when there is none.
         self._source: str | None = None
@@ -217,10 +223,25 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         await super().async_added_to_hass()
         if self._gps_entity_id is None:
             return
+        # The companion app puts the phone's geocoded-location sensor on the
+        # same device as its tracker, with a unique id that ends in
+        # `_geocoded_location`. Found rather than configured: the household
+        # already said which phone, and the sensor follows from that.
+        registry = er.async_get(self.hass)
+        if (tracker := registry.async_get(self._gps_entity_id)) and tracker.device_id:
+            for entry in er.async_entries_for_device(registry, tracker.device_id):
+                if entry.domain == "sensor" and (entry.unique_id or "").endswith(
+                    "_geocoded_location"
+                ):
+                    self._geocode_entity_id = entry.entity_id
+                    break
+        watched = [self._gps_entity_id]
+        if self._geocode_entity_id is not None:
+            # A geocode landing after its fix can change the place's name, so
+            # it is a reason to look again.
+            watched.append(self._geocode_entity_id)
         self.async_on_remove(
-            async_track_state_change_event(
-                self.hass, [self._gps_entity_id], self._async_gps_changed
-            )
+            async_track_state_change_event(self.hass, watched, self._async_gps_changed)
         )
         self._async_update_attrs()
 
@@ -263,6 +284,26 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             age=dt_util.utcnow() - state.last_updated,
         )
 
+    def _geocode(self, fix: Fix) -> Geocode | None:
+        """What the phone's reverse geocoder says about this fix, if it is about it.
+
+        The sensor is a separate state from the tracker and can be a poll
+        behind, so its own `Location` has to agree with the fix before its
+        words are used: a geocode still describing the last street must not
+        name the neighbourhood the phone just left.
+        """
+        if self._geocode_entity_id is None or self.hass is None:
+            return None
+        state = self.hass.states.get(self._geocode_entity_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        geocode = Geocode.from_attributes(state.attributes)
+        if not geocode.describes(
+            fix.latitude, fix.longitude, max(GEOCODE_SLACK, fix.accuracy)
+        ):
+            return None
+        return geocode
+
     def _home_circle(self, data: PersonData) -> Circle | None:
         """The footprint of the zone standing for the home welkom placed them in."""
         if data.home_zone_id is None or self.hass is None:
@@ -286,6 +327,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
 
         data = self.data
         fix = self._fix()
+        geocode = self._geocode(fix) if fix else None
         now = dt_util.utcnow()
         # Which side spoke last, so the handover needs real evidence in both
         # directions instead of flipping on whichever fix landed most recently.
@@ -323,6 +365,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
                 self.coordinator_context,
                 None if (data and use_welkom) else fix,
                 now,
+                geocode,
             )
 
         if data and use_welkom:
@@ -338,7 +381,16 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             self._source = "gps"
             # Nothing from before the walk describes where they are now.
             self._held = None
-            self._attr_state = None
+            # Named by the tightest place that holds: a real circle, one of
+            # the household's polygons, or a neighbourhood the phone's
+            # geocoder put them in -- the same answer a trip would give for
+            # this fix, so the badge, the stop and the card never disagree.
+            # `person.*` copies this state, which is how "Roma" reaches the
+            # dashboard without a zone being drawn. Nothing recognised leaves
+            # it to Home Assistant's own zone logic, which says `not_home` or
+            # the city.
+            place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
+            self._attr_state = place.name if place else None
             self._attr_latitude = fix.latitude
             self._attr_longitude = fix.longitude
             self._attr_location_accuracy = fix.accuracy

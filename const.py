@@ -217,3 +217,11 @@ def resolve_mapped_user_id(
             return user_id
 
     return config.get(CONF_DEFAULT_USER) or None
+
+
+# How far the position a reverse geocode describes may sit from the fix it is
+# read alongside and still be about it. The companion app writes the tracker
+# and the geocoded sensor as two states; when they are the same fix the two
+# positions are identical, and when the sensor is a poll behind they are a
+# street apart.
+GEOCODE_SLACK = 50.0
