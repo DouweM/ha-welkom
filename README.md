@@ -96,15 +96,18 @@ homes:
       roaming: true
 ```
 
-A fresh fix (under 15 minutes old, within 500 m) from the phone of anybody welkom sees on the router is a fix on the router, and the newest wins. Everybody on it then stands at that position on the map (their tracker's state stays the home's name, with a `roaming: true` attribute), and `device_tracker.<home>` carries it on its own.
+A fresh fix (under 15 minutes old, within 500 m) from the **phone** of somebody whose phone welkom sees on the router, taken since that phone joined it, is a fix on the router. Not a laptop's owner (a laptop left in the room keeps its owner "on" the router through dinner), and not a fix from before the phone (re)joined (the taxi, the café on the way back). Everybody on the router then stands at its position on the map (their tracker's state stays the home's name, with a `roaming: true` attribute), and `device_tracker.<home>` carries it on its own.
 
 The position is held for exactly as long as the router stays plugged into the same thing — welkom's `GET /api/homes/<id>/uplink`, which for a GL.iNet is the WiFi it repeats, the cable, the tethered phone or the SIM:
 
 - **Silence is not movement.** Phones on a router in a hotel room go quiet for hours overnight; while the router keeps repeating the same SSID, it is where it was.
 - **A new uplink is.** A router cannot change hotels or board a plane without changing what it is plugged into, so the position is dropped then, until a phone on the new uplink reports. A fix taken before the router got there — the taxi from the airport, still the phone's latest as it joins — does not count.
-- **Dark for 15 minutes is packed up.** A blip keeps the position; a router that stops answering for longer loses it.
+- **Dark for 15 minutes is packed up.** A blip keeps the position; a router that stops answering for longer loses it, and the people last seen on it are released to their phones.
+- **Walking out is not moving.** A phone stays on the router's client list for a minute or two after its owner leaves the room. So a fix more than WiFi range (100 m, plus both fixes' accuracy) from the router asks a question instead of moving it: if that same phone is still on the router 10 minutes later, the router went with it (a car on a SIM, a plane) and takes its latest fix; if it drops off first, it walked out. Fixes in range never move the router, only sharpen it, so short steps can't drag it along.
 
-It survives a Home Assistant restart if the router is still on the uplink it was placed on. Older welkoms without the uplink endpoint still work, losing only the "new uplink" rule.
+It survives a Home Assistant restart if the router is still on the uplink it was placed on. It needs welkom's uplink endpoint: against an older welkom the router is placed but never let go of, since neither a new uplink nor going dark can be seen.
+
+To place it by hand — the hotel's address before anybody's phone has reported — call `welkom.locate` on `device_tracker.<home>` with `latitude`, `longitude` and optionally `accuracy`. It is held by the same rule, so it lasts until the router moves.
 
 ### Freshness
 

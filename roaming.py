@@ -16,13 +16,24 @@ the uplink it was taken on, and no longer:
   until a phone on the new uplink reports one.
 - **The router goes dark** for longer than a WiFi blip: it was packed up. The
   position goes with it.
-- **A fix older than the uplink** describes somewhere the router was not: the
-  taxi from the airport, still the phone's latest fix as it joins the hotel's
-  router. Only fixes taken on the current uplink count.
 
-No timers beyond the dark one, and nothing about flights or cars: a router on a
-plane's WiFi is on a new uplink, and one on a SIM in a moving car is followed
-by whichever phone reports last, the same as one standing still.
+And a fix only speaks for the router if it was taken by a PHONE while that
+phone was ON the router — not by somebody welkom places there through the
+laptop they left in the room, and not before the phone (re)joined: the taxi
+from the airport, the café on the way back, still the phone's latest fix as it
+connects.
+
+That still leaves somebody walking out. A phone stays on the router's client
+list for a minute or two after its owner has left the room, and its fixes from
+the street would drag the router to the café, where it would stay overnight
+while the phone left in the room sleeps. So **a fix out of WiFi range of the
+router is a question, not an answer**: has the phone that took it gone, or has
+the router gone with it? The phone answers by staying. If it is still on the
+router `confirm` later, the router moved with it — a car on a SIM, a plane —
+and takes its latest fix. If it drops off first, it walked out, and the
+question is dropped with it. A fix in range of the router settles it the other
+way. Fixes in range never move the router either, only sharpen it, so a walk
+out in short steps can't drag it along.
 
 Pure, like `location.py` and `trip.py`: no Home Assistant imports, so
 ``tests/check_roaming.py`` can exercise it without booting HA.
@@ -34,6 +45,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
+
+from .location import distance
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -62,6 +75,11 @@ class Roaming:
     dark_since: datetime | None = None
     """When the router stopped answering, while it is not answering."""
     position: Position | None = None
+    moving: Position | None = None
+    """The latest fix out of range of `position`, while it is unclear whether
+    its phone walked out or the router went with it."""
+    moving_since: datetime | None = None
+    """When that phone's first fix out of range was taken."""
 
 
 def uplink_key(interface: str | None, ssid: str | None = None) -> str | None:
@@ -76,8 +94,13 @@ def uplink_key(interface: str | None, ssid: str | None = None) -> str | None:
 
 
 def on_uplink(roaming: Roaming, uplink: str | None, now: datetime) -> Roaming:
-    """The router answered, plugged into `uplink`."""
-    if roaming.uplink_since is not None and uplink == roaming.uplink:
+    """The router answered, plugged into `uplink`.
+
+    None is "it can't say", not "it is plugged into nothing": a router that
+    answers at all is carrying traffic over something. So an unknown uplink
+    leaves a known one standing rather than reading as a move.
+    """
+    if roaming.uplink_since is not None and uplink in (roaming.uplink, None):
         if roaming.dark_since is None:
             return roaming
         # Back from a blip on the same network: it never left.
@@ -100,6 +123,10 @@ def gone_dark(roaming: Roaming, now: datetime, max_dark: timedelta) -> Roaming:
     return roaming
 
 
+def _moved(roaming: Roaming, position: Position) -> Roaming:
+    return replace(roaming, position=position, moving=None, moving_since=None)
+
+
 def locate(
     roaming: Roaming,
     *,
@@ -108,42 +135,93 @@ def locate(
     accuracy: float,
     at: datetime,
     by: str,
+    on_since: datetime,
     max_accuracy: float,
+    reach: float,
+    confirm: timedelta,
 ) -> Roaming:
-    """Fold in a fix from the phone of somebody connected to the router.
+    """Fold in a fix from `by`'s phone, which has been on the router since `on_since`.
 
-    The newest fix wins, whoever took it: everybody on the router is within
-    WiFi range of it, and when the router moves they all move with it. A fix
-    vaguer than `max_accuracy` is a phone guessing from cell towers indoors and
-    would move the router to the next block.
+    A fix vaguer than `max_accuracy` is a phone guessing from cell towers
+    indoors and would move the router to the next block. One further than
+    `reach` (WiFi range, give or take both fixes' accuracy) from the router
+    only moves it once its phone has stayed on the router for `confirm`; see
+    the module docstring.
     """
     if roaming.uplink_since is None or roaming.dark_since is not None:
         return roaming
-    if at < roaming.uplink_since or accuracy > max_accuracy:
+    if at < max(roaming.uplink_since, on_since) or accuracy > max_accuracy:
         return roaming
-    if roaming.position is not None and at <= roaming.position.at:
-        return roaming
-    return replace(
-        roaming,
-        position=Position(
-            latitude=latitude,
-            longitude=longitude,
-            accuracy=accuracy,
-            at=at,
-            by=by,
-        ),
+    fix = Position(
+        latitude=latitude, longitude=longitude, accuracy=accuracy, at=at, by=by
     )
+    current = roaming.position
+    if current is None:
+        return _moved(roaming, fix)
+    if at <= current.at:
+        return roaming
+
+    away = distance(latitude, longitude, current.latitude, current.longitude)
+    # The router's own blur counts only up to WiFi range: a vague first fix
+    # must not make a walker's sharp one from down the block "in range".
+    if away <= reach + accuracy + min(current.accuracy, reach):
+        # A phone in range: the router is where it was. Sharpened by a better
+        # fix, never moved by one, and whatever looked like a move wasn't.
+        position = fix if accuracy < current.accuracy else current
+        return _moved(roaming, position)
+
+    if roaming.moving is None or roaming.moving.by != by:
+        if roaming.moving is not None and at - roaming.moving.at < confirm:
+            # Somebody else is already being asked; one question at a time.
+            return roaming
+        return replace(roaming, moving=fix, moving_since=at)
+    if roaming.moving_since is not None and at - roaming.moving_since >= confirm:
+        return _moved(roaming, fix)
+    return replace(roaming, moving=fix)
+
+
+def on_phones(
+    roaming: Roaming, phones: set[str], now: datetime, confirm: timedelta
+) -> Roaming:
+    """Whose phones are on the router now; this is how a move gets answered.
+
+    A phone that dropped off was walking out, and its question goes with it.
+    One that is still on it `confirm` after its first fix out of range has
+    taken the router along, which then stands at its latest fix.
+    """
+    moving = roaming.moving
+    if moving is None or roaming.moving_since is None:
+        return roaming
+    if roaming.dark_since is not None:
+        # Whatever list there is now is the last one from before it went
+        # dark, and a phone on it may have walked out since.
+        return roaming
+    if moving.by not in phones:
+        return replace(roaming, moving=None, moving_since=None)
+    if now - roaming.moving_since >= confirm:
+        return _moved(roaming, moving)
+    return roaming
+
+
+def place(roaming: Roaming, position: Position) -> Roaming:
+    """Put the router somewhere by hand, held like any fix until it moves."""
+    if roaming.uplink_since is None or roaming.dark_since is not None:
+        return roaming
+    return _moved(roaming, position)
 
 
 def resume(live: Roaming, remembered: Roaming) -> Roaming:
     """Take back what outlived a restart, if the router has not moved since.
 
     The coordinator's first poll runs before any entity can restore anything,
-    so by the time this arrives the router has usually answered already — on
-    an uplink first seen just now, with no position. If it is the uplink the
-    position was taken on, the router is where it was, and the restart is not
-    a reason to forget that. If it has not answered yet, the remembered state
-    waits for `on_uplink` to judge it like any other.
+    so by the time this arrives the router has usually answered already. If it
+    is on the uplink the position was taken on, the router is where it was —
+    and the remembered position wins over anything placed since the restart,
+    because nothing placed since has been through the walking-out question:
+    every phone "joined" the router at the first poll, and a restored phone
+    tracker can carry its owner's café as its newest fix. If it has not
+    answered yet, the remembered state waits for `on_uplink` to judge it like
+    any other.
     """
     if remembered.uplink_since is None:
         return live
@@ -151,15 +229,23 @@ def resume(live: Roaming, remembered: Roaming) -> Roaming:
         # Not answered yet, or dark since the restart: the dark clock that
         # started then is the one that decides, as for any other outage.
         return replace(remembered, dark_since=live.dark_since)
-    if live.uplink == remembered.uplink and live.position is None:
+    if live.uplink == remembered.uplink:
         return replace(
-            live, uplink_since=remembered.uplink_since, position=remembered.position
+            live,
+            uplink_since=remembered.uplink_since,
+            position=remembered.position or live.position,
+            moving=None,
+            moving_since=None,
         )
     return live
 
 
 def roaming_as_dict(roaming: Roaming) -> dict[str, Any]:
-    """Everything, as plain JSON, for a restart to hand back."""
+    """What a restart should hand back, as plain JSON.
+
+    Not a pending move: whether a phone stays on the router is a question
+    about the next ten minutes, and a restart is not part of the answer.
+    """
     position = roaming.position
     return {
         "uplink": roaming.uplink,

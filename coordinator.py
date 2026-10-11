@@ -27,8 +27,10 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .client import WelkomClient
 from .const import (
+    ROAMING_CONFIRM,
     ROAMING_MAX_ACCURACY,
     ROAMING_MAX_DARK,
+    ROAMING_REACH,
     TRIP_AWAY_FLOOR,
     TRIP_COARSE_ZONE,
     TRIP_DWELL,
@@ -46,13 +48,24 @@ from .models import (
     ConnectedPerson,
     Connection,
     Device,
+    DeviceType,
     Home,
     Person,
     Role,
     Room,
 )
 from .places import Geocode, PlaceSpec, places_from_config, recognise
-from .roaming import Roaming, gone_dark, locate, on_uplink, resume, uplink_key
+from .roaming import (
+    Position,
+    Roaming,
+    gone_dark,
+    locate,
+    on_phones,
+    on_uplink,
+    place,
+    resume,
+    uplink_key,
+)
 from .trip import Place, Trip, follow, stale
 
 _LOGGER = logging.getLogger(__name__)
@@ -185,6 +198,15 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         self._trip_listeners: list[Callable[[], None]] = []
         # Where each roaming home is, by the phones on it — see `roaming.py`.
         self._roaming: dict[str, Roaming] = {}
+        # Since when each roaming home's fetch has been failing; see
+        # `_fetch_homes`.
+        self._failing_since: dict[str, datetime] = {}
+        # Whose phones are on each roaming home, and since when: only a phone
+        # on the router, and only since it joined, speaks for where it is.
+        self._phones_on: dict[str, dict[str, datetime]] = {}
+        # The homes whose connections the last poll actually fetched, rather
+        # than kept from before.
+        self._fresh_homes: set[str] = set()
         # Told separately for the same reason as trips, and told LATER: the
         # trackers that feed `locate` are the same trackers that listen.
         self._roaming_listeners: list[Callable[[], None]] = []
@@ -328,6 +350,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
         conns: list[ConnectedPerson] = []
         connections: list[Connection] = []
+        self._fresh_homes = set()
         for home_id, result in zip(home_ids, results, strict=True):
             if isinstance(result, BaseException):
                 if home_id == main_home_id:
@@ -339,11 +362,21 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                     result,
                 )
                 previous = self._last_by_home.get(home_id)
+                if self.is_roaming(home_id):
+                    # A travel router that has been dark this long was packed
+                    # up, and its people are on their way somewhere: holding
+                    # them there would keep their phones from ever taking over.
+                    now = dt_util.utcnow()
+                    since = self._failing_since.setdefault(home_id, now)
+                    if now - since > ROAMING_MAX_DARK:
+                        previous = None
                 if previous is None:
                     continue
                 result = previous
             else:
                 self._last_by_home[home_id] = result
+                self._failing_since.pop(home_id, None)
+                self._fresh_homes.add(home_id)
 
             home_conns, home_connections = result
             conns.extend(home_conns)
@@ -405,6 +438,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             if home == main_home and room:
                 self._update_area_data(rooms[room.id], conn)
 
+        self._follow_phones(connections)
+
         zones = self._zones_by_name
         for state_people in people_by_state.values():
             # TODO: This affects locations on the map, should only be used for those actually shown?
@@ -423,9 +458,14 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         )
 
     def is_roaming(self, home_id: str) -> bool:
-        """Whether the home moves, per `attrs.homeassistant.roaming` in welkom."""
+        """Whether the home moves, per `attrs.homeassistant.roaming` in welkom.
+
+        Never the instance's own home, which is `zone.home` whatever it says.
+        """
         home = (self.homes or {}).get(home_id)
-        return bool(home and home.attrs.homeassistant.roaming)
+        return bool(
+            home and home.attrs.homeassistant.roaming and home.id != self.home.id
+        )
 
     def roaming(self, home_id: str) -> Roaming | None:
         """What is known about where a roaming home is; None if it doesn't roam."""
@@ -458,6 +498,47 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                     uplink_key(result.interface, result.ssid) if result else None,
                     now,
                 )
+            if after != before:
+                self._roaming[home_id] = after
+                self._notify_roaming()
+
+    def _follow_phones(self, connections: list[Connection]) -> None:
+        """Note whose phones are on each roaming home, and answer pending moves.
+
+        A phone, and not whichever device welkom placed the person by: a laptop
+        left in the hotel room keeps its owner "on" the router through dinner,
+        and the phone's fixes from the restaurant say nothing about the room.
+        """
+        now = dt_util.utcnow()
+        for home_id in self.homes or {}:
+            if not self.is_roaming(home_id):
+                continue
+            before = self._roaming.get(home_id)
+            if home_id not in self._fresh_homes or (
+                before is not None and before.dark_since is not None
+            ):
+                # Connections kept from before (here, or welkom's own cache
+                # while the router can't be asked) say who WAS on it. Nobody
+                # joins or confirms anything on that.
+                continue
+            on = {
+                conn.person.id
+                for conn in connections
+                if conn.person is not None
+                and conn.home is not None
+                and conn.home.id == home_id
+                and conn.metadata.online is not False
+                and conn.device.type in (DeviceType.phone, DeviceType.handheld)
+            }
+            since = self._phones_on.setdefault(home_id, {})
+            for person_id in set(since) - on:
+                del since[person_id]
+            for person_id in on:
+                since.setdefault(person_id, now)
+
+            if before is None:
+                continue
+            after = on_phones(before, on, now, ROAMING_CONFIRM)
             if after != before:
                 self._roaming[home_id] = after
                 self._notify_roaming()
@@ -498,9 +579,14 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
     @callback
     def locate(self, home_id: str, person_id: str, fix: Fix) -> None:
-        """A fix from the phone of somebody welkom sees on a roaming home."""
+        """A fix from the phone of somebody welkom sees on a roaming home.
+
+        Only counted while one of their phones is on the router, and only if
+        taken since it joined — see `_follow_phones`.
+        """
         before = self._roaming.get(home_id)
-        if before is None or fix.at is None:
+        on_since = self._phones_on.get(home_id, {}).get(person_id)
+        if before is None or fix.at is None or on_since is None:
             return
         after = locate(
             before,
@@ -509,11 +595,27 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             accuracy=fix.accuracy,
             at=fix.at,
             by=person_id,
+            on_since=on_since,
             max_accuracy=ROAMING_MAX_ACCURACY,
+            reach=ROAMING_REACH,
+            confirm=ROAMING_CONFIRM,
         )
         if after != before:
             self._roaming[home_id] = after
             self._notify_roaming()
+
+    @callback
+    def place(self, home_id: str, position: Position) -> bool:
+        """Put a roaming home somewhere by hand; False if it isn't answering."""
+        before = self._roaming.get(home_id)
+        if before is None:
+            return False
+        after = place(before, position)
+        if after == before:
+            return after.position == position
+        self._roaming[home_id] = after
+        self._notify_roaming()
+        return True
 
     @callback
     def restore_roaming(self, home_id: str, remembered: Roaming) -> None:

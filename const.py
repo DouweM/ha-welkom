@@ -48,6 +48,14 @@ ROAMING_MAX_DARK = timedelta(minutes=15)
 # iPhone falls back to cell towers and reports a kilometre; that would move the
 # router to the next neighbourhood.
 ROAMING_MAX_ACCURACY = 500.0
+# How far a fix may land from where the router is and still be a phone on it:
+# WiFi range indoors, before either fix's accuracy is added.
+ROAMING_REACH = 100.0
+# How long a fix out of that range has to be outlasted by another before the
+# router counts as moved. Somebody who walked out of the room is off the
+# router's client list well within it (welkom's online window is 2 minutes);
+# a plane or a car on a SIM is not.
+ROAMING_CONFIRM = timedelta(minutes=10)
 
 # --- Trips: where somebody went while they were out --------------------------
 # See trip.py for the state machine these drive.

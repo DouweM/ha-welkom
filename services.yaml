@@ -27,3 +27,41 @@ set_device_suspended:
       default: true
       selector:
         boolean:
+
+locate:
+  name: Locate
+  description: >-
+    Set where a roaming home (a travel router) is, by hand. Held like a phone's
+    fix: for as long as the router stays on the uplink it is on now.
+  target:
+    entity:
+      integration: welkom
+      domain: device_tracker
+  fields:
+    latitude:
+      name: Latitude
+      required: true
+      example: 40.7617
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: any
+    longitude:
+      name: Longitude
+      required: true
+      example: -73.9880
+      selector:
+        number:
+          min: -180
+          max: 180
+          step: any
+    accuracy:
+      name: Accuracy
+      description: Radius in metres the router is within.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 5000
+          unit_of_measurement: m

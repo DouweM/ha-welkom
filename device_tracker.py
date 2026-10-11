@@ -6,6 +6,8 @@ from datetime import datetime
 import math
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.components.device_tracker import (
     TrackerEntity,
     TrackerEntityDescription,
@@ -20,7 +22,12 @@ from homeassistant.const import (
     EntityCategory,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import (
+    config_validation as cv,
+    entity_platform,
+    entity_registry as er,
+)
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -114,6 +121,15 @@ async def async_setup_entry(
         WelkomRoamingTracker(coordinator, home)
         for home in (coordinator.homes or {}).values()
         if coordinator.is_roaming(home.id)
+    )
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        "locate",
+        {
+            vol.Required("latitude"): cv.latitude,
+            vol.Required("longitude"): cv.longitude,
+            vol.Optional("accuracy", default=30): vol.Coerce(float),
+        },
+        "async_locate",
     )
 
 
@@ -261,6 +277,12 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             async_track_state_change_event(self.hass, watched, self._async_gps_changed)
         )
         self._async_update_attrs()
+
+    async def async_locate(self, **_: Any) -> None:
+        """`welkom.locate` is for roaming homes; a person is placed by their phone."""
+        raise ServiceValidationError(
+            f"{self.entity_id} is a person; welkom.locate places a roaming home"
+        )
 
     @callback
     def _async_gps_changed(self, event: Event[EventStateChangedData]) -> None:
@@ -556,6 +578,31 @@ class WelkomRoamingTracker(
         last = await self.async_get_last_extra_data()
         if last is not None and (remembered := roaming_from_dict(last.as_dict())):
             self.coordinator.restore_roaming(self._home_id, remembered)
+
+    async def async_locate(
+        self, latitude: float, longitude: float, accuracy: float = 30
+    ) -> None:
+        """Place the router by hand: `welkom.locate`.
+
+        Held by the same rule as a phone's fix, so it lasts exactly as long as
+        the uplink it was set on. Which is why there has to be one: a router
+        that has not answered yet, or is dark, has nowhere to put it.
+        """
+        placed = self.coordinator.place(
+            self._home_id,
+            Position(
+                latitude=latitude,
+                longitude=longitude,
+                accuracy=accuracy,
+                at=dt_util.utcnow(),
+                by="manual",
+            ),
+        )
+        if not placed:
+            raise HomeAssistantError(
+                f"{self.name or self._home_id} isn't answering, so there is no "
+                "uplink to hold a position on"
+            )
 
     @property
     def latitude(self) -> float | None:
