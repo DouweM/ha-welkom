@@ -246,6 +246,10 @@ class Home(Area):
         class HomeAssistant(BaseModel):
             """Hints for this integration, set on the home in welkom.yml."""
 
+            roaming: bool = False
+            """Whether this home moves: a travel router, whose position is
+            borrowed from the phones connected to it — see `roaming.py`."""
+
             places: list[Any] = []
             """Places the household recognises that no circle describes — a
             name plus `geocodes_as` matchers and/or a `polygon`. Kept raw here
@@ -303,6 +307,13 @@ class Home(Area):
     def unique_id(self) -> str:
         """The unique ID of the home."""
         return f"home_{self.id}"
+
+
+class Uplink(BaseModel):
+    """What a home's router is plugged into, from welkom's `/uplink`."""
+
+    interface: str
+    ssid: str | None = None
 
 
 class Metadata(BaseModel):

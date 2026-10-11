@@ -24,6 +24,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.restore_state import (
+    ExtraStoredData,
+    RestoredExtraData,
+    RestoreEntity,
+)
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -32,8 +37,9 @@ from .client import WelkomClient
 from .const import DOMAIN, GEOCODE_SLACK, GPS_MAX_AGE, WELKOM_HOLD
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
 from .location import Circle, Fix, placement_holds, placement_lingers
-from .models import Person
+from .models import Home, Person
 from .places import Geocode
+from .roaming import Position, roaming_as_dict, roaming_from_dict
 
 
 async def async_setup_entry(
@@ -103,6 +109,12 @@ async def async_setup_entry(
 
     _add_new_people()
     config_entry.async_on_unload(coordinator.async_add_listener(_add_new_people))
+
+    async_add_entities(
+        WelkomRoamingTracker(coordinator, home)
+        for home in (coordinator.homes or {}).values()
+        if coordinator.is_roaming(home.id)
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -221,6 +233,11 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
     async def async_added_to_hass(self) -> None:
         """Follow the phone tracker, once there is a state machine to read."""
         await super().async_added_to_hass()
+        # Somebody on a travel router stands wherever it does, and it moves
+        # between polls, whenever anybody's phone on it reports.
+        self.async_on_remove(
+            self.coordinator.add_roaming_listener(self._handle_coordinator_update)
+        )
         if self._gps_entity_id is None:
             return
         # The companion app puts the phone's geocoded-location sensor on the
@@ -282,6 +299,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             longitude=longitude,
             accuracy=state.attributes.get(ATTR_GPS_ACCURACY) or 0,
             age=dt_util.utcnow() - state.last_updated,
+            at=state.last_updated,
         )
 
     def _geocode(self, fix: Fix) -> Geocode | None:
@@ -382,6 +400,20 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             self._attr_longitude = data.longitude
             self._attr_location_accuracy = 0
             self._attr_in_zones = data.in_zones
+            if (roaming := self.coordinator.roaming(data.home.id)) is not None:
+                # On a travel router: a fresh fix from this phone is a fix on
+                # the router, and the router's position is theirs.
+                if (
+                    fix
+                    and fix.age <= GPS_MAX_AGE
+                    and isinstance(self.coordinator_context, str)
+                ):
+                    self.coordinator.locate(data.home.id, self.coordinator_context, fix)
+                    roaming = self.coordinator.roaming(data.home.id) or roaming
+                if position := roaming.position:
+                    self._attr_latitude = position.latitude
+                    self._attr_longitude = position.longitude
+                    self._attr_location_accuracy = position.accuracy
         elif fix:
             # Position from the phone; zones and state follow from it, the way
             # they do for any GPS tracker.
@@ -446,9 +478,135 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
 
             attr["home_id"] = data.home.id
             attr["home"] = data.home.display_name
+            if self.coordinator.is_roaming(data.home.id):
+                attr["roaming"] = True
 
             if room := data.room:
                 attr["room_id"] = room.id
                 attr["room"] = room.display_name
 
+        return attr
+
+
+class WelkomRoamingTracker(
+    CoordinatorEntity[WelkomCoordinator], RestoreEntity, TrackerEntity
+):
+    """Where a roaming home is: a travel router, placed by the phones on it.
+
+    The position is the newest fresh fix from a phone welkom sees on the
+    router, held for as long as the router stays plugged into the same thing
+    and dropped the moment it isn't — see `roaming.py`, which holds the whole
+    decision. Without one the state is `unknown` and the router is off the
+    map, which is the truth while it is in a bag or on a plane nobody's phone
+    has reported from.
+
+    Its state names where it is the way a person's tracker does: the tightest
+    zone or configured place that holds the position, else Home Assistant's
+    own `not_home`. Naming a town needs a geocoder, which a phone has and a
+    router does not.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = None
+    _attr_device_info: DeviceInfo | None = None
+    _attr_entity_category: EntityCategory | None = None
+
+    def __init__(self, coordinator: WelkomCoordinator, home: Home):
+        """Initialize the tracker."""
+        super().__init__(coordinator, context=home.id)
+        self._home_id = home.id
+        self._attr_unique_id = f"{home.unique_id}_location"
+        self._attr_icon = home.icon
+        self._attr_entity_picture = home.avatar_url
+        # The home's own device, beside its people-count sensors.
+        self._attr_device_info = DeviceInfo(
+            name=home.display_name,
+            identifiers={(DOMAIN, home.unique_id)},
+            via_device=(DOMAIN, coordinator.client.unique_id),
+            suggested_area=home.display_name,
+        )
+
+    @property
+    def _position(self) -> Position | None:
+        roaming = self.coordinator.roaming(self._home_id)
+        return roaming.position if roaming else None
+
+    @property
+    def force_update(self) -> bool:
+        """Only write real changes; see `WelkomTracker.force_update`."""
+        return False
+
+    @property
+    def available(self) -> bool:
+        """Always: what it knows outlives welkom being briefly unreachable."""
+        return True
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData | None:
+        """The whereabouts, whole, so a restart does not forget the hotel."""
+        roaming = self.coordinator.roaming(self._home_id)
+        return RestoredExtraData(roaming_as_dict(roaming)) if roaming else None
+
+    async def async_added_to_hass(self) -> None:
+        """Listen for the router moving, and hand back what outlived a restart."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self.coordinator.add_roaming_listener(self._handle_coordinator_update)
+        )
+        last = await self.async_get_last_extra_data()
+        if last is not None and (remembered := roaming_from_dict(last.as_dict())):
+            self.coordinator.restore_roaming(self._home_id, remembered)
+
+    @property
+    def latitude(self) -> float | None:
+        return position.latitude if (position := self._position) else None
+
+    @property
+    def longitude(self) -> float | None:
+        return position.longitude if (position := self._position) else None
+
+    @property
+    def location_accuracy(self) -> float:
+        return position.accuracy if (position := self._position) else 0
+
+    @property
+    def state(self) -> StateType:
+        """The tightest place that holds the router, like a person's tracker."""
+        if (position := self._position) is None:
+            return None
+        place = self.coordinator.place_at(
+            Fix(
+                latitude=position.latitude,
+                longitude=position.longitude,
+                accuracy=position.accuracy,
+            ),
+            coarse=math.inf,
+        )
+        return place.name if place else super().state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """What it is plugged into, who placed it, and who is on it."""
+        roaming = self.coordinator.roaming(self._home_id)
+        attr: dict[str, Any] = {}
+        if roaming is None:
+            return attr
+
+        interface, _, ssid = (roaming.uplink or "").partition(":")
+        attr["uplink"] = interface or None
+        attr["ssid"] = ssid or None
+        attr["uplink_since"] = roaming.uplink_since
+        attr["dark_since"] = roaming.dark_since
+
+        position = roaming.position
+        attr["located_at"] = position.at if position else None
+        located_by = None
+        if position:
+            person = (self.coordinator.people or {}).get(position.by)
+            located_by = person.display_name if person else position.by
+        attr["located_by"] = located_by
+
+        data = self.coordinator.data
+        home = data.homes.get(self._home_id) if data else None
+        attr["people"] = home.people if home else []
         return attr

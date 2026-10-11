@@ -5,7 +5,7 @@ import aiohttp
 from pydantic import BaseModel
 
 from .const import IMAGE_URL_PREFIX
-from .models import ConnectedPerson, Connection, Home, Person, Role
+from .models import ConnectedPerson, Connection, Home, Person, Role, Uplink
 
 
 class WelkomClient(BaseModel):
@@ -129,6 +129,21 @@ class WelkomClient(BaseModel):
             if connected_person.home:
                 self._proxy_images(connected_person.home)
         return connected_people
+
+    async def uplink(self, home_id: str) -> Uplink | None:
+        """What the home's router is plugged into, or None if welkom can't say.
+
+        A welkom from before the endpoint answers 404, which is "can't say"
+        too. A 503 is the router not answering, and is raised: to a roaming
+        home that is news, not a gap.
+        """
+        try:
+            raw = await self.request(f"{self.home_url(home_id)}/uplink")
+        except aiohttp.ClientResponseError as err:
+            if err.status == 404:
+                return None
+            raise
+        return Uplink.model_validate(raw) if raw else None
 
     def home_url(self, home_id: str) -> str:
         return f"{self.url}/api/homes/{quote(home_id, safe='')}"

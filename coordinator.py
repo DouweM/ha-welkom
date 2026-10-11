@@ -27,6 +27,8 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .client import WelkomClient
 from .const import (
+    ROAMING_MAX_ACCURACY,
+    ROAMING_MAX_DARK,
     TRIP_AWAY_FLOOR,
     TRIP_COARSE_ZONE,
     TRIP_DWELL,
@@ -50,6 +52,7 @@ from .models import (
     Room,
 )
 from .places import Geocode, PlaceSpec, places_from_config, recognise
+from .roaming import Roaming, gone_dark, locate, on_uplink, resume, uplink_key
 from .trip import Place, Trip, follow, stale
 
 _LOGGER = logging.getLogger(__name__)
@@ -180,6 +183,12 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # tells them again. Home Assistant kills the dispatch after ten
         # thousand queued events and the instance stops answering.
         self._trip_listeners: list[Callable[[], None]] = []
+        # Where each roaming home is, by the phones on it — see `roaming.py`.
+        self._roaming: dict[str, Roaming] = {}
+        # Told separately for the same reason as trips, and told LATER: the
+        # trackers that feed `locate` are the same trackers that listen.
+        self._roaming_listeners: list[Callable[[], None]] = []
+        self._roaming_notify_pending = False
 
     async def _async_setup(self):
         # A stay is made of time, so trips have to be advanced by the clock and
@@ -348,9 +357,10 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # `coordinator.people` and add entities for any new ids.
         self.people = await self.client.fetch_people()
 
-        (conns, connections), suspended = await asyncio.gather(
+        (conns, connections), suspended, _ = await asyncio.gather(
             self._fetch_homes(),
             self._suspended_devices(),
+            self._follow_uplinks(),
         )
 
         homes: dict[str, HomeData] = defaultdict(HomeData)
@@ -411,6 +421,108 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             devices=self._device_data(connections),
             suspended_devices=suspended,
         )
+
+    def is_roaming(self, home_id: str) -> bool:
+        """Whether the home moves, per `attrs.homeassistant.roaming` in welkom."""
+        home = (self.homes or {}).get(home_id)
+        return bool(home and home.attrs.homeassistant.roaming)
+
+    def roaming(self, home_id: str) -> Roaming | None:
+        """What is known about where a roaming home is; None if it doesn't roam."""
+        if not self.is_roaming(home_id):
+            return None
+        return self._roaming.get(home_id, Roaming())
+
+    async def _follow_uplinks(self) -> None:
+        """Ask every roaming home's router what it is plugged into.
+
+        Only welkom's 503 means the router went dark. Any other failure is
+        welkom itself being unreachable, which says nothing about the router.
+        """
+        home_ids = [home_id for home_id in self.homes or {} if self.is_roaming(home_id)]
+        results = await asyncio.gather(
+            *(self.client.uplink(home_id) for home_id in home_ids),
+            return_exceptions=True,
+        )
+        now = dt_util.utcnow()
+        for home_id, result in zip(home_ids, results, strict=True):
+            before = self._roaming.get(home_id, Roaming())
+            if isinstance(result, aiohttp.ClientResponseError) and result.status == 503:
+                after = gone_dark(before, now, ROAMING_MAX_DARK)
+            elif isinstance(result, BaseException):
+                _LOGGER.debug("Uplink of %s unknown", home_id, exc_info=result)
+                continue
+            else:
+                after = on_uplink(
+                    before,
+                    uplink_key(result.interface, result.ssid) if result else None,
+                    now,
+                )
+            if after != before:
+                self._roaming[home_id] = after
+                self._notify_roaming()
+
+    @callback
+    def add_roaming_listener(
+        self, update_callback: Callable[[], None]
+    ) -> CALLBACK_TYPE:
+        """Listen for a roaming home moving, which the poll cycle does not carry."""
+
+        def remove() -> None:
+            if update_callback in self._roaming_listeners:
+                self._roaming_listeners.remove(update_callback)
+
+        self._roaming_listeners.append(update_callback)
+        return remove
+
+    @callback
+    def _notify_roaming(self) -> None:
+        """Tell the listeners on the next turn of the loop, once.
+
+        `locate` is called by a person's tracker while it decides its state,
+        and that tracker listens too, as does everybody else on the router.
+        Telling them in the same breath would re-enter the tracker halfway
+        through its own update.
+        """
+        if self._roaming_notify_pending:
+            return
+        self._roaming_notify_pending = True
+
+        @callback
+        def notify() -> None:
+            self._roaming_notify_pending = False
+            for update_callback in list(self._roaming_listeners):
+                update_callback()
+
+        self.hass.loop.call_soon(notify)
+
+    @callback
+    def locate(self, home_id: str, person_id: str, fix: Fix) -> None:
+        """A fix from the phone of somebody welkom sees on a roaming home."""
+        before = self._roaming.get(home_id)
+        if before is None or fix.at is None:
+            return
+        after = locate(
+            before,
+            latitude=fix.latitude,
+            longitude=fix.longitude,
+            accuracy=fix.accuracy,
+            at=fix.at,
+            by=person_id,
+            max_accuracy=ROAMING_MAX_ACCURACY,
+        )
+        if after != before:
+            self._roaming[home_id] = after
+            self._notify_roaming()
+
+    @callback
+    def restore_roaming(self, home_id: str, remembered: Roaming) -> None:
+        """Take back a roaming home's whereabouts after a restart; see `resume`."""
+        before = self._roaming.get(home_id, Roaming())
+        after = resume(before, remembered)
+        if after != before:
+            self._roaming[home_id] = after
+            self._notify_roaming()
 
     async def _suspended_devices(self) -> set[str]:
         """The suspended-devices set, empty when welkom predates the endpoint.
@@ -751,6 +863,12 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         for another home, so same-named rooms in different homes don't collide —
         and the home's by its name, the main home being `zone.home`.
         """
+        if self.is_roaming(data.home.id):
+            # A zone is a fixed circle and this home is not; the person's
+            # tracker takes the position from `roaming` instead.
+            data.in_zones = []
+            data.home_zone_id = None
+            return
         if data.home == self.home:
             home_zone = self.hass.states.get(ENTITY_ID_HOME)
         else:

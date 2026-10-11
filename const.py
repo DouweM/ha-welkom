@@ -36,6 +36,19 @@ GPS_MAX_AGE = timedelta(minutes=15)
 # anyone having moved.
 WELKOM_HOLD = timedelta(minutes=5)
 
+# --- Roaming homes: a travel router, placed by the phones on it ---------------
+# See roaming.py.
+#
+# How long a roaming home's router may stop answering before its position is
+# dropped. A hotel's WiFi blinks for a minute or two; a router that has been
+# gone for a quarter of an hour is in a bag, and wherever it comes back up is
+# somewhere nobody has a fix for.
+ROAMING_MAX_DARK = timedelta(minutes=15)
+# The vaguest fix that may place a router. Indoors, away from the windows, an
+# iPhone falls back to cell towers and reports a kilometre; that would move the
+# router to the next neighbourhood.
+ROAMING_MAX_ACCURACY = 500.0
+
 # --- Trips: where somebody went while they were out --------------------------
 # See trip.py for the state machine these drive.
 #

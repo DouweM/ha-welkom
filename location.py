@@ -13,7 +13,7 @@ booting HA.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 import math
 
 _EARTH_RADIUS_M = 6_371_008.8
@@ -29,6 +29,9 @@ class Fix:
     """Radius in meters the true position is within."""
     age: timedelta = timedelta(0)
     """How long ago the phone reported this fix."""
+    at: datetime | None = None
+    """When the phone reported it: `age` is relative to whenever it was read,
+    and two readings of one fix must compare equal."""
 
 
 @dataclass(frozen=True, kw_only=True)

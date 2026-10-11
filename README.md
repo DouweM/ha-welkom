@@ -15,6 +15,10 @@ Home Assistant integration for [welkom](https://github.com/DouweM/welcome), the 
 
 - `sensor.<device>_connection` — the network the device is connected through (`residents`, `tailscale`, ...), or `unknown` when offline. When a device is connected via multiple networks at once, the primary is chosen online-first, then highest role, then most recently seen. Attributes: ip, mac, wifi ssid, online, last seen, home/room, person, and all active networks.
 
+**Per roaming home** (see [Roaming homes](#roaming-homes)):
+
+- `device_tracker.<home>` — where a travel router is, borrowed from the phones on it; `unknown` while nobody has placed it. Attributes: `uplink` and `ssid` (what it is plugged into), `uplink_since`, `dark_since`, `located_at`, `located_by`, `people`.
+
 **Per home and room**: people count, known/unknown people counts, and comma-joined name lists — six sensors each, attached to devices suggested into matching HA areas.
 
 Ten fixed `Unknown Person N` tracker slots cover unrecognized personal devices.
@@ -78,6 +82,29 @@ homes:
 The geocode comes from the companion app's *Geocoded Location* sensor, found on the same device as the person's phone tracker; attributes are `area_of_interest`, `thoroughfare`, `sub_locality`, `postal_code`, `locality`, `sub_administrative_area`, `administrative_area`, `country`, matched case-insensitively. A geocode is only trusted when its own position agrees with the fix, so a sensor a poll behind can't name the street the phone just left.
 
 Configured places take part in the same "tightest zone wins" rule as real zones. A polygon is worth the radius of the circle with its area; a geocode match is worth a nominal radius for the attribute (an area of interest is tighter than a sub-locality is tighter than a locality). So a 48 m school circle still beats the neighbourhood around it, and a real zone drawn smaller always wins. The name reaches three things at once: the tracker's state (and so `person.*` and any badge reading it), the trip sensor's stops and turns, and whatever composes sentences from either. Draw a small **passive** zone with the same name if you want an icon for it on the map; passive means the circle never claims anybody by geometry. (Its person count still follows the circle, not the name — HA counts by coordinates — so the marker is a picture, not a sensor.)
+
+### Roaming homes
+
+A travel router is a home that moves. Mark it in welkom.yml and the integration places it by the phones connected to it:
+
+```yaml
+homes:
+- id: awaysys
+  resolver: glinet
+  attrs:
+    homeassistant:
+      roaming: true
+```
+
+A fresh fix (under 15 minutes old, within 500 m) from the phone of anybody welkom sees on the router is a fix on the router, and the newest wins. Everybody on it then stands at that position on the map (their tracker's state stays the home's name, with a `roaming: true` attribute), and `device_tracker.<home>` carries it on its own.
+
+The position is held for exactly as long as the router stays plugged into the same thing — welkom's `GET /api/homes/<id>/uplink`, which for a GL.iNet is the WiFi it repeats, the cable, the tethered phone or the SIM:
+
+- **Silence is not movement.** Phones on a router in a hotel room go quiet for hours overnight; while the router keeps repeating the same SSID, it is where it was.
+- **A new uplink is.** A router cannot change hotels or board a plane without changing what it is plugged into, so the position is dropped then, until a phone on the new uplink reports. A fix taken before the router got there — the taxi from the airport, still the phone's latest as it joins — does not count.
+- **Dark for 15 minutes is packed up.** A blip keeps the position; a router that stops answering for longer loses it.
+
+It survives a Home Assistant restart if the router is still on the uplink it was placed on. Older welkoms without the uplink endpoint still work, losing only the "new uplink" rule.
 
 ### Freshness
 
