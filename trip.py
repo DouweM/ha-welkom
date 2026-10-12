@@ -239,6 +239,13 @@ class Trip:
     """Whether any fix got beyond `away_floor`. A trip that never did, and
     touched no named zone, is a tracker artefact or a walk to the gate."""
 
+    home: Circle | None = None
+    """The home the trip left from, and the one everything is measured against:
+    the main home, or a travel router's position while they were on it. A walk
+    from a hotel is a walk, not a day 3,000 km out of town. None only in a trip
+    remembered from before this was recorded, which the caller measures from the
+    main home as it always did."""
+
     @property
     def settled(self) -> bool:
         """Whether they have stopped somewhere."""
@@ -434,6 +441,11 @@ def follow(
         # anchor into a stay.
         return None if trip is None else _settle(trip, now, dwell)
 
+    # `home` is where a NEW trip leaves from. A trip under way stays measured
+    # from where it left, whatever the caller now takes home to be.
+    if trip is not None and trip.home is not None:
+        home = trip.home
+
     from_home = distance(fix.latitude, fix.longitude, home.latitude, home.longitude)
 
     name = place.name if place else None
@@ -474,6 +486,7 @@ def follow(
             turn_latitude=fix.latitude,
             turn_longitude=fix.longitude,
             ventured=from_home >= away_floor,
+            home=home,
         )
 
     # The zone they were in BEFORE this fix. Read it now, because the trip is
@@ -754,6 +767,15 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
         "turn_latitude": trip.turn_latitude,
         "turn_longitude": trip.turn_longitude,
         "ventured": trip.ventured,
+        "home": (
+            {
+                "latitude": trip.home.latitude,
+                "longitude": trip.home.longitude,
+                "radius": trip.home.radius,
+            }
+            if trip.home
+            else None
+        ),
     }
 
 
@@ -820,6 +842,9 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
             turn_latitude=data.get("turn_latitude"),
             turn_longitude=data.get("turn_longitude"),
             ventured=data.get("ventured", False),
+            # Absent in anything written before trips knew where they left
+            # from; the caller measures those from the main home.
+            home=Circle(**home) if (home := data.get("home")) else None,
         )
     except (KeyError, TypeError, ValueError):
         return None

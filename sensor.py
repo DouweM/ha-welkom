@@ -594,7 +594,7 @@ class WelkomTripSensor(
 
         person_id = cast(str, self.coordinator_context)
         trip = self.coordinator.trip(person_id)
-        home = self.coordinator.home_circle
+        home = self.coordinator.trip_home(trip) if trip else None
 
         if trip is None or home is None:
             self._attr_native_value = "home"
@@ -604,7 +604,9 @@ class WelkomTripSensor(
             # which is after welkom has the phone back and the trip is over.
             # Only the itinerary and its two ends -- nothing that describes a
             # position, because there is no position any more.
-            if home is not None and (ended := self.coordinator.last_trip(person_id)):
+            if (ended := self.coordinator.last_trip(person_id)) and (
+                left_from := self.coordinator.trip_home(ended[0])
+            ):
                 over, returned_at = ended
                 self._attr_extra_state_attributes = {
                     "left_at": over.left_at,
@@ -615,7 +617,7 @@ class WelkomTripSensor(
                     # journey's shape, and the card written as they walk back
                     # in has to know which kind of trip it is summarising.
                     "furthest": round(over.furthest),
-                    **_itinerary(over, home),
+                    **_itinerary(over, left_from),
                 }
             return
 

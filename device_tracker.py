@@ -43,7 +43,7 @@ from homeassistant.util import dt as dt_util
 from .client import WelkomClient
 from .const import DOMAIN, GEOCODE_SLACK, GPS_MAX_AGE, WELKOM_HOLD
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
-from .location import Circle, Fix, placement_holds, placement_lingers
+from .location import Circle, Fix, fix_in_circle, placement_holds, placement_lingers
 from .models import Home, Person
 from .places import Geocode
 from .roaming import Position, roaming_as_dict, roaming_from_dict
@@ -357,6 +357,24 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             radius=zone.attributes["radius"],
         )
 
+    def _base(self, data: PersonData) -> Circle | None:
+        """Where a trip from here would leave from, if not the main home.
+
+        A travel router's position while it has one, drawn as big as the main
+        home's zone: a hotel is a building too, and the same footprint keeps a
+        walk to the lobby from counting as going out. None for any fixed home,
+        and for a router with no position yet.
+        """
+        roaming = self.coordinator.roaming(data.home.id)
+        if roaming is None or (position := roaming.position) is None:
+            return None
+        main = self.coordinator.home_circle
+        return Circle(
+            latitude=position.latitude,
+            longitude=position.longitude,
+            radius=main.radius if main else 0,
+        )
+
     @callback
     def _async_update_attrs(self) -> None:
         """Update the attributes of the entity."""
@@ -377,6 +395,24 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         use_welkom = data is not None and placement_holds(
             self._home_circle(data), fix, GPS_MAX_AGE, gps_in_charge=gps_in_charge
         )
+        if (
+            use_welkom
+            and data is not None
+            and fix
+            and fix.age <= GPS_MAX_AGE
+            and isinstance(self.coordinator_context, str)
+            and self.coordinator.is_roaming(data.home.id)
+            and not self.coordinator.phone_on(data.home.id, self.coordinator_context)
+            and (base := self._base(data)) is not None
+            and not fix_in_circle(fix, base)
+        ):
+            # On a travel router by some other device, while the phone is
+            # speaking from off it and away from it: a laptop left in the hotel
+            # room says nothing about where its owner went to dinner. Only the
+            # phone keeps them there, the same rule that places the router
+            # itself. A phone that has merely dozed off the WiFi is still in
+            # the room, and its fix says so.
+            use_welkom = False
         if data is not None and use_welkom:
             self._held = (data, now)
         elif (
@@ -403,7 +439,14 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         ):
             if data and use_welkom:
                 # welkom has them: they are home and any trip is over.
-                self.coordinator.observe(self.coordinator_context, None, now, geocode)
+                self.coordinator.observe(
+                    self.coordinator_context,
+                    None,
+                    now,
+                    geocode,
+                    base=self._base(data),
+                    roaming=self.coordinator.is_roaming(data.home.id),
+                )
             elif fix:
                 self.coordinator.observe(self.coordinator_context, fix, now, geocode)
             # And when NEITHER speaks, nothing is said at all. Silence from

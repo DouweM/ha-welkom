@@ -535,4 +535,51 @@ check("six minutes walked through a zone is a visit", been(walked), ("Lomas",))
 driven = _crossing(8.0)
 check("six minutes driven through the same zone is not", been(driven), ())
 
+# --- A trip from a travel router ----------------------------------------------
+#
+# The Belvedere Hotel, where AwaySys was on 2026-10-12. A walk from there is
+# measured from the hotel: two blocks out is two blocks, not 3,300 km.
+
+HOTEL = Circle(latitude=40.7617, longitude=-73.9880, radius=55)
+
+
+def walk(trip, metres_north: float, at_s: float, home=HOTEL):
+    return follow(
+        trip,
+        Fix(
+            latitude=HOTEL.latitude + metres_north / 111_000,
+            longitude=HOTEL.longitude,
+            accuracy=5.0,
+        ),
+        home,
+        T0 + timedelta(seconds=at_s),
+        settle_radius=SETTLE_RADIUS,
+        place_radius=PLACE_RADIUS,
+        dwell=DWELL,
+        away_floor=AWAY_FLOOR,
+        still_speed=STILL_SPEED,
+        turn_slack=TURN_SLACK,
+    )
+
+
+stroll = walk(None, 400, 0)
+check("a trip remembers the home it left from", stroll.home, HOTEL)
+check("...and measures from it", round(stroll.furthest, -1), 400)
+# The caller may pass the main home again later (a restart forgets the base);
+# a trip under way keeps measuring from where it left.
+stroll = walk(stroll, 800, 600, home=HOME)
+check("a trip under way keeps its own home", stroll.home, HOTEL)
+check("...so it stays a walk", round(stroll.furthest, -1), 800)
+check(
+    "its home survives a restart",
+    trip_mod.trip_from_dict(trip_mod.trip_as_dict(stroll)),
+    stroll,
+)
+older = {k: v for k, v in trip_mod.trip_as_dict(stroll).items() if k != "home"}
+check(
+    "one written before trips knew their home leaves it to the caller",
+    trip_mod.trip_from_dict(older).home,
+    None,
+)
+
 print("all trip checks passed")

@@ -27,6 +27,7 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .client import WelkomClient
 from .const import (
+    GPS_MAX_AGE,
     ROAMING_CONFIRM,
     ROAMING_MAX_ACCURACY,
     ROAMING_MAX_DARK,
@@ -187,6 +188,13 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         self._remembered: dict[str, Trip] = {}
         # The last trip each person finished, and when — see `last_trip`.
         self._ended: dict[str, tuple[Trip, datetime]] = {}
+        # Where each person was last home, when that was not the main home: the
+        # travel router they were on, or None while it had no position yet. The
+        # next trip leaves from it — see `observe`.
+        self._bases: dict[str, Circle | None] = {}
+        # Whom the trackers have placed at home since setup, which makes a
+        # restored trip's base old news — see `restore_trip`.
+        self._observed: set[str] = set()
         # The household's configured places, read on first use — see `places`.
         self._places: tuple[PlaceSpec, ...] | None = None
         # Told separately from the coordinator's own listeners, and that is not
@@ -543,6 +551,10 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 self._roaming[home_id] = after
                 self._notify_roaming()
 
+    def phone_on(self, home_id: str, person_id: str) -> bool:
+        """Whether one of the person's phones is on the roaming home right now."""
+        return person_id in self._phones_on.get(home_id, {})
+
     @callback
     def add_roaming_listener(
         self, update_callback: Callable[[], None]
@@ -707,6 +719,11 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         that began after the remembered one last spoke is that artefact, not a
         new journey, and the remembered one carries on in its place.
         """
+        # Where it left from outlives it, too: a trip from the hotel that is too
+        # old to claim still says the hotel is where the next one starts.
+        # Unless the tracker has already said where they are, which is newer.
+        if trip.home is not None and person_id not in self._observed:
+            self._bases[person_id] = trip.home
         live = self._trips.get(person_id)
         if live is None:
             self._remembered[person_id] = trip
@@ -723,6 +740,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         fix: Fix | None,
         now: datetime,
         geocode: Geocode | None = None,
+        base: Circle | None = None,
+        roaming: bool = False,
     ) -> None:
         """Fold what the person's tracker just decided into their trip.
 
@@ -736,10 +755,24 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         over. `geocode` is what the phone's reverse geocoder said about the
         fix, if the tracker has one that describes it; it is how a stop in a
         neighbourhood the household named gets that name.
+
+        `roaming` says welkom has them on a travel router, and `base` is its
+        position, which the next trip is measured from. A travel router is a
+        home while they're on it, so a walk from the hotel is a local trip with
+        stops and a way back, not a day out of town. A router with no position
+        yet (a new uplink, or back from dark) passes no `base`, and the trip
+        leaves from its own first fix instead: the phone has only just left the
+        router, so that is as good as the hotel's door. Anywhere else is the
+        main home, `home_circle`.
         """
         if fix is None:
             # Home. Whatever was remembered across the restart is over too —
             # they may well have walked in while Home Assistant was down.
+            self._observed.add(person_id)
+            if roaming:
+                self._bases[person_id] = base
+            else:
+                self._bases.pop(person_id, None)
             self._remembered.pop(person_id, None)
             if (over := self._trips.pop(person_id, None)) is not None:
                 # Remembered only if it amounted to anything. welkom losing
@@ -750,7 +783,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 # minutes later. `been_to` is already the judge of whether a
                 # trip happened; a trip it has nothing to say about does not
                 # displace one it did.
-                home = self.home_circle
+                home = self.trip_home(over)
                 if home is None or over.been_to(
                     home,
                     dwell=TRIP_DWELL,
@@ -763,9 +796,23 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 self._notify_trips()
             return
 
+        # Where a new trip leaves from; one under way keeps its own.
         home = self.home_circle
         if home is None:
             return
+        if person_id in self._bases:
+            base = self._bases[person_id]
+            if base is None and person_id not in self._trips:
+                # Left a router with no position: the trip leaves from its own
+                # first fix, but only a fresh one. An old fix is from before
+                # they ever got to the hotel -- the taxi -- and a trip measured
+                # from there would make the hotel room its first stop.
+                if fix.age > GPS_MAX_AGE:
+                    return
+                base = Circle(
+                    latitude=fix.latitude, longitude=fix.longitude, radius=home.radius
+                )
+            home = base or home
 
         # The same fix arriving again is not news: the phone said it once and
         # has been quiet since, which is exactly what `Trip.seen_at` is for.
@@ -849,6 +896,10 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
         if changed:
             self._notify_trips()
+
+    def trip_home(self, trip: Trip) -> Circle | None:
+        """The home `trip` is measured against: where it left from."""
+        return trip.home or self.home_circle
 
     @property
     def home_circle(self) -> Circle | None:
