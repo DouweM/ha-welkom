@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 import urllib.parse
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator
 
 
 class Network(BaseModel):
@@ -93,6 +93,31 @@ class Person(BaseModel):
             gps_tracker: str | None = None
             """device_tracker carrying the person's phone GPS; the integration's
             own option for the person overrides it."""
+
+            handles: dict[str, list[str]] = {}
+            """How other systems know this person, by system: the opaque ids
+            they see instead of a name -- `schlage` access codes, `home_key`
+            credentials, `whatsapp` ids. Passed through untouched, so the
+            household can resolve a handle back to a person in one place."""
+
+            duties: list[str] = []
+            """Household jobs that explain who did something when presence
+            alone cannot -- `driver`, `trash`. Free-form; the household's
+            automations decide what each one means."""
+
+            @field_validator("handles", mode="before")
+            @classmethod
+            def _strings(cls, value: Any) -> Any:
+                # A WhatsApp id is all digits, and YAML reads an unquoted one
+                # as a number. It is an identifier, not a quantity.
+                if isinstance(value, dict):
+                    return {
+                        str(system): [
+                            str(h) for h in (ids if isinstance(ids, list) else [ids])
+                        ]
+                        for system, ids in value.items()
+                    }
+                return value
 
         homeassistant: HomeAssistant = HomeAssistant()
 

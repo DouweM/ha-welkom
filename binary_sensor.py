@@ -8,6 +8,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -125,6 +126,35 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
 
         main_home = self.coordinator.home
         self._attr_is_on = bool(data and data.home == main_home)
+
+        # Who this is, to anything that has to turn a handle back into a
+        # person: a Schlage code, a WhatsApp id. One entity per person, every
+        # person welkom knows, so a template can find somebody by any of
+        # their handles without a table of its own -- see `handles` on the
+        # person in welkom.yml.
+        person = (self.coordinator.people or {}).get(self.coordinator_context)
+        hints = person.attrs.homeassistant if person else None
+        self._attr_extra_state_attributes = {
+            "person_id": self.coordinator_context,
+            "person": person.display_name if person else None,
+            "handles": dict(hints.handles) if hints else {},
+            "duties": list(hints.duties) if hints else [],
+            # The person's trip sensor, when they have one, so nothing has to
+            # build its entity id out of their name.
+            "trip": self._trip_entity_id(),
+        }
+
+    def _trip_entity_id(self) -> str | None:
+        if self.hass is None:
+            return None
+        return er.async_get(self.hass).async_get_entity_id(
+            "sensor", DOMAIN, f"{self.entity_description.device_id}_trip"
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Fill in what needed Home Assistant to be there, e.g. the trip."""
+        await super().async_added_to_hass()
+        self._async_update_attrs()
 
     @callback
     def _handle_coordinator_update(self) -> None:
