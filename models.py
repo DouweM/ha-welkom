@@ -68,6 +68,15 @@ class Device(BaseModel):
         return "mdi:" + (self.type.mdi_icon if self.type else "devices")
 
 
+def _ids(value: Any) -> list[str]:
+    """A hand-written list of ids, forgivingly: None is none, a bare value is
+    a list of one, and every id is a string."""
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    return [str(item) for item in items if item is not None and str(item)]
+
+
 class Person(BaseModel):
     known: bool
     id: str
@@ -107,17 +116,22 @@ class Person(BaseModel):
 
             @field_validator("handles", mode="before")
             @classmethod
-            def _strings(cls, value: Any) -> Any:
-                # A WhatsApp id is all digits, and YAML reads an unquoted one
-                # as a number. It is an identifier, not a quantity.
-                if isinstance(value, dict):
-                    return {
-                        str(system): [
-                            str(h) for h in (ids if isinstance(ids, list) else [ids])
-                        ]
-                        for system, ids in value.items()
-                    }
-                return value
+            def _handles(cls, value: Any) -> Any:
+                # Hand-edited and free-form, and one person's typo must not
+                # take every entity down with it: setup validates the whole
+                # roster at once. A WhatsApp id is all digits, and YAML reads
+                # an unquoted one as a number -- it is an identifier, not a
+                # quantity. A bare id is a list of one; an empty one is none.
+                if not isinstance(value, dict):
+                    return {}
+                return {
+                    str(system): _ids(ids) for system, ids in value.items() if _ids(ids)
+                }
+
+            @field_validator("duties", mode="before")
+            @classmethod
+            def _duties(cls, value: Any) -> Any:
+                return _ids(value)
 
         homeassistant: HomeAssistant = HomeAssistant()
 

@@ -168,7 +168,7 @@ Other systems know people by ids that mean nothing to anybody: a lock sees an ac
    | map(attribute='attributes.person') | first }}
 ```
 
-The systems and duties are free-form strings; the integration passes them through untouched. Handles are always strings, so an unquoted all-digit id in YAML still matches.
+The systems and duties are free-form strings; the integration passes them through untouched. Handles are always strings, so an unquoted all-digit id in YAML still matches. People are read when the integration starts, so after changing them in welkom.yml, restart welkom and then reload the integration.
 
 ## Pictures
 
