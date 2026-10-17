@@ -109,6 +109,7 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
         """Initialize the binary sensor."""
 
         self.entity_description = entity_description
+        self._last_presence: str | None = None
 
         super().__init__(coordinator, context=entity_description.context)
 
@@ -126,6 +127,8 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
 
         main_home = self.coordinator.home
         self._attr_is_on = bool(data and data.home == main_home)
+        if self._attr_is_on and data:
+            self._last_presence = data.presence
 
         # Who this is, to anything that has to turn a handle back into a
         # person: a Schlage code, a WhatsApp id. One entity per person, every
@@ -146,6 +149,11 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
             # at the front door with no device behind it yet: it expires on a
             # clock, so it going off is not evidence that anybody left.
             "presence": data.presence if data else None,
+            # And what it rested on the last time it was on, kept once it is
+            # off: by the time anything reacts to somebody going, `presence`
+            # is already gone, and a door sighting running out must not read
+            # as them leaving. None until they've been home since a restart.
+            "last_presence": self._last_presence,
         }
 
     def _trip_entity_id(self) -> str | None:
