@@ -340,6 +340,21 @@ check(
     None,
 )
 check(
+    "a small place reaches no further than it is wide",
+    linger(
+        places.GeocodedArea(
+            place=Place(name="Parque", radius=150.0),
+            latitude=chapu_ii.latitude,
+            longitude=chapu_ii.longitude,
+        ),
+        latitude=19.417635,
+        longitude=-99.197979,
+        bare=cdmx,
+        max_distance=300,
+    ),
+    None,
+)
+check(
     "with nothing geocoded yet, the bare name stands",
     linger(None, latitude=19.4176, longitude=-99.1979, bare=cdmx, max_distance=300),
     None,

@@ -341,7 +341,9 @@ def lingering_area(
     """
     if area is None:
         return None
-    if distance(latitude, longitude, area.latitude, area.longitude) > max_distance:
+    # Never further than the place itself is wide.
+    reach = min(max_distance, area.place.radius)
+    if distance(latitude, longitude, area.latitude, area.longitude) > reach:
         return None
     if bare is not None and bare.radius <= area.place.radius:
         return None

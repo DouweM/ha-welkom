@@ -64,7 +64,7 @@ from .location import (
     placement_lingers,
 )
 from .models import Home, Person
-from .places import Geocode, GeocodedArea, lingering_area
+from .places import Geocode, GeocodedArea, lingering_area, recognise
 from .roaming import Position, roaming_as_dict, roaming_from_dict
 
 
@@ -239,6 +239,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         # The last neighbourhood the phone's geocode named, for the fixes it
         # doesn't geocode; and the fix whose geocode is being waited for.
         self._area: GeocodedArea | None = None
+        # The fix a wait last ran out on, which is named without waiting again.
         self._geocode_waited: object = None
         self._geocode_wait_cancel: Callable[[], None] | None = None
 
@@ -326,15 +327,24 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             fix.latitude, fix.longitude, max(GEOCODE_SLACK, fix.accuracy)
         )
 
+    @staticmethod
+    def _fix_key(fix: Fix) -> object:
+        return fix.at or (fix.latitude, fix.longitude)
+
     def _await_geocode(self, fix: Fix) -> bool:
-        """Start waiting for this fix's geocode, once; False if not worth it."""
+        """Whether to keep the current name while this fix's geocode is on its way.
+
+        One deadline at a time: anything that looks again inside it -- a
+        welkom poll, the next fix -- keeps waiting rather than naming the fix
+        without its geocode, and a run of fixes can't push it back, so a name
+        is never held past GEOCODE_WAIT. Once it passes, the fix it ended on
+        is named as it is."""
         if self.hass is None or not self._geocode_is_stale(fix):
             return False
-        key = fix.at or (fix.latitude, fix.longitude)
-        if key == self._geocode_waited:
+        if self._geocode_wait_cancel is not None:
+            return True
+        if self._fix_key(fix) == self._geocode_waited:
             return False
-        self._geocode_waited = key
-        self._cancel_geocode_wait()
         self._geocode_wait_cancel = async_call_later(
             self.hass, GEOCODE_WAIT, self._async_geocode_waited
         )
@@ -343,8 +353,23 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
     @callback
     def _async_geocode_waited(self, _now: datetime) -> None:
         self._geocode_wait_cancel = None
+        if fix := self._fix():
+            self._geocode_waited = self._fix_key(fix)
         self._async_update_attrs()
         self.async_write_ha_state()
+
+    def _geocoded_area(self, fix: Fix, geocode: Geocode) -> GeocodedArea | None:
+        """The household place this geocode names, if the geocode is why."""
+        latitude = geocode.latitude or fix.latitude
+        longitude = geocode.longitude or fix.longitude
+        places = self.coordinator.places
+        named = recognise(
+            places, latitude=latitude, longitude=longitude, geocode=geocode
+        )
+        drawn = recognise(places, latitude=latitude, longitude=longitude, geocode=None)
+        if named is None or (drawn is not None and drawn.name == named.name):
+            return None
+        return GeocodedArea(place=named, latitude=latitude, longitude=longitude)
 
     def _cancel_geocode_wait(self) -> None:
         if self._geocode_wait_cancel is not None:
@@ -522,6 +547,8 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
 
         if data and use_welkom:
             self._source = "welkom"
+            # A neighbourhood from before welkom had them isn't where they are.
+            self._area = None
             self._attr_state = data.state
             self._attr_latitude = data.latitude
             self._attr_longitude = data.longitude
@@ -581,19 +608,16 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             was_home = not gps_in_charge or self._attr_state == STATE_HOME
             if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
                 self._attr_state = STATE_HOME
+                self._area = None
             elif geocode is not None:
                 place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
                 self._attr_state = place.name if place else STATE_NOT_HOME
                 self._cancel_geocode_wait()
-                # Remembered when the name came from the geocode, so the fixes
-                # iOS doesn't geocode can keep it (see `lingering_area`).
-                bare = self.coordinator.place_at(fix, None, coarse=math.inf)
-                if place and (bare is None or bare.name != place.name):
-                    self._area = GeocodedArea(
-                        place=place,
-                        latitude=geocode.latitude or fix.latitude,
-                        longitude=geocode.longitude or fix.longitude,
-                    )
+                # What this geocode alone calls the spot, zones aside, so the
+                # fixes iOS doesn't geocode can keep it (see `lingering_area`).
+                # Every geocode replaces it, including one that names nothing:
+                # the newest geocode is the one to believe.
+                self._area = self._geocoded_area(fix, geocode)
             elif (
                 gps_in_charge
                 and self._attr_state not in (None, STATE_HOME, STATE_NOT_HOME)
