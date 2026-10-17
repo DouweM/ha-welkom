@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
 import aiohttp
@@ -8,6 +8,9 @@ from pydantic import BaseModel
 
 from .const import IMAGE_URL_PREFIX
 from .models import ConnectedPerson, Connection, Home, Person, Role, Uplink
+
+if TYPE_CHECKING:
+    from .changes import Event
 
 
 class WelkomClient(BaseModel):
@@ -21,6 +24,7 @@ class WelkomClient(BaseModel):
     # While above zero, presence reads skip welkom's 30-second cache: set
     # around a refresh that a `changed` event triggered (see changes.py).
     _fresh: int = 0
+    _fresh_after: float | None = None
 
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
@@ -120,20 +124,29 @@ class WelkomClient(BaseModel):
     # one home". A travel router with a broken API would take the whole house's
     # presence down with it. Per home, each failure stays where it belongs.
     @contextmanager
-    def fresh_reads(self) -> Iterator[None]:
-        """Within this, presence reads skip welkom's 30-second cache."""
+    def fresh_reads(self, after: float | None = None) -> Iterator[None]:
+        """Within this, presence reads skip welkom's 30-second cache; with
+        `after`, they're from a read at least that recent (see changes.py)."""
         self._fresh += 1
+        previous = self._fresh_after
+        if after is not None:
+            self._fresh_after = max(after, previous or after)
         try:
             yield
         finally:
             self._fresh -= 1
+            self._fresh_after = previous if self._fresh else None
 
     def _presence_url(self, home_id: str, path: str) -> str:
         url = f"{self.home_url(home_id)}/{path}"
+        if self._fresh_after is not None:
+            return f"{url}?after={self._fresh_after}"
         return f"{url}?fresh=true" if self._fresh else url
 
-    async def changes(self, home_id: str, read_timeout: float) -> AsyncIterator[str]:
-        """The event names welkom streams for a home; see changes.py."""
+    async def changes(
+        self, home_id: str, read_timeout: float
+    ) -> AsyncIterator["Event"]:
+        """The events welkom streams for a home; see changes.py."""
         from .changes import events
 
         async with self.session.get(

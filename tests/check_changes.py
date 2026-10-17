@@ -53,9 +53,10 @@ def check(label: str, got: object, want: object) -> None:
 STREAM = (
     b'event: ready\ndata: {"home": "oasis"}\n\n'
     b": keepalive\n\n"
-    b'event: changed\r\ndata: {"home": "oasis"}\r\n\r\n'
+    b'event: changed\r\ndata: {"home": "oasis", "at": 1792206516.5}\r\n\r\n'
     b'data: {"orphan": true}\n\n'
     b'event: changed\ndata: {"home": "oasis"}\n\n'
+    b"event: changed\ndata: not json\n\n"
 )
 
 
@@ -64,8 +65,8 @@ async def lines(blob: bytes) -> AsyncIterator[bytes]:
         yield line
 
 
-async def names(blob: bytes) -> list[str]:
-    return [name async for name in changes.events(lines(blob))]
+async def parsed(blob: bytes) -> list[tuple[str, float | None]]:
+    return [(e.name, e.at) async for e in changes.events(lines(blob))]
 
 
 @contextmanager
@@ -100,8 +101,8 @@ class FakeClient:
         if isinstance(outcome, asyncio.Event):
             await outcome.wait()  # a stream that stays open and quiet
             return
-        for name in outcome:  # type: ignore[union-attr]
-            yield name
+        for event in outcome:  # type: ignore[union-attr]
+            yield event if isinstance(event, changes.Event) else changes.Event(event)
 
 
 class FakeCoordinator:
@@ -109,9 +110,11 @@ class FakeCoordinator:
         self.client = client
         self.homes = {"oasis": object()}
         self.fresh_refreshes = 0
+        self.afters: list[float | None] = []
 
-    async def async_refresh_fresh(self) -> None:
+    async def async_refresh_fresh(self, after: float | None = None) -> None:
         self.fresh_refreshes += 1
+        self.afters.append(after)
 
 
 async def run(coordinator: FakeCoordinator, sleeps: list[float]) -> None:
@@ -135,9 +138,14 @@ async def run(coordinator: FakeCoordinator, sleeps: list[float]) -> None:
 
 async def main() -> None:
     check(
-        "events: ready and changed, not keepalives or bare data",
-        await names(STREAM),
-        ["ready", "changed", "changed"],
+        "events: ready and changed with their `at`, not keepalives or bare data",
+        await parsed(STREAM),
+        [
+            ("ready", None),
+            ("changed", 1792206516.5),
+            ("changed", None),
+            ("changed", None),
+        ],
     )
 
     client = FakeClient([["ready", "changed", "changed"]])
@@ -145,6 +153,11 @@ async def main() -> None:
     sleeps: list[float] = []
     await run(coordinator, sleeps)
     check("each ready/changed is one fresh refresh", coordinator.fresh_refreshes, 3)
+
+    client = FakeClient([[changes.Event("changed", 1792206516.5)]])
+    coordinator = FakeCoordinator(client)
+    await run(coordinator, [])
+    check("a change's `at` is passed on as `after`", coordinator.afters, [1792206516.5])
 
     not_found = aiohttp.ClientResponseError(
         request_info=None,  # type: ignore[arg-type]

@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
+import json
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import aiohttp
 
@@ -38,21 +39,35 @@ STABLE_AFTER = 60.0
 READ_TIMEOUT = 60.0
 
 
-async def events(lines: AsyncIterable[bytes]) -> AsyncIterator[str]:
-    """The names of the server-sent events in a stream of lines.
+class Event(NamedTuple):
+    name: str
+    at: float | None = None
+    """When welkom's read that noticed began (Unix time), for `changed`."""
 
-    Only the `event:` field matters here; `data:` carries nothing the
-    coordinator needs, and comments (`: keepalive`) are just proof of life.
+
+async def events(lines: AsyncIterable[bytes]) -> AsyncIterator[Event]:
+    """The server-sent events in a stream of lines.
+
+    Comments (`: keepalive`) are just proof of life. Of `data:`, only `at` is
+    used: refetching with `after=at` makes whichever welkom worker answers
+    read at least as recently as the one that noticed the change.
     """
     name: str | None = None
+    at: float | None = None
     async for raw in lines:
         line = raw.decode().rstrip("\r\n")
         if not line:
             if name:
-                yield name
-            name = None
+                yield Event(name, at)
+            name = at = None
         elif line.startswith("event:"):
             name = line.removeprefix("event:").strip()
+        elif line.startswith("data:"):
+            try:
+                value = json.loads(line.removeprefix("data:")).get("at")
+            except (ValueError, AttributeError):
+                value = None
+            at = float(value) if isinstance(value, int | float) else None
 
 
 async def follow_changes(coordinator: WelkomCoordinator) -> None:
@@ -70,8 +85,8 @@ async def _follow_home(coordinator: WelkomCoordinator, home_id: str) -> None:
             async for event in coordinator.client.changes(home_id, READ_TIMEOUT):
                 # `ready` too: whatever changed while the stream was down
                 # (or before it first opened) was never announced.
-                if event in ("ready", "changed"):
-                    await coordinator.async_refresh_fresh()
+                if event.name in ("ready", "changed"):
+                    await coordinator.async_refresh_fresh(after=event.at)
         except aiohttp.ClientResponseError as err:
             if err.status == 404:
                 _LOGGER.info(
