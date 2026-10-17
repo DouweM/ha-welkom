@@ -117,6 +117,9 @@ class PersonData(BaseModel):
     home_zone_id: str | None = None
     """The HA zone standing for `home`, when one exists."""
 
+    presence: str = "network"
+    """What the placement rests on; see `ConnectedPerson.presence`."""
+
     activity: Activity | None = None
 
     # Do we need an eq method here for always_update=False to work?
@@ -437,6 +440,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 home=home,
                 room=room,
                 state=state,
+                presence=conn.presence,
                 activity=conn.activity,
             )
 

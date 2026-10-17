@@ -424,4 +424,10 @@ class ConnectedPerson(BaseModel):
 
     connection: Connection
 
+    presence: str = "network"
+    """What welkom's placement rests on: `network` (a device on the WiFi, or
+    heard on DNS) or `door` (a credential at the front door, held for a while
+    with no device behind it). Older welkoms don't say, and only had the
+    network."""
+
     activity: Activity | None = None

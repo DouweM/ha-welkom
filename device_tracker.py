@@ -579,6 +579,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
 
             attr["home_id"] = data.home.id
             attr["home"] = data.home.display_name
+            attr["presence"] = data.presence
             if self.coordinator.is_roaming(data.home.id):
                 attr["roaming"] = True
 

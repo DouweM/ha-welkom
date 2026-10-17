@@ -142,6 +142,10 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
             # The person's trip sensor, when they have one, so nothing has to
             # build its entity id out of their name.
             "trip": self._trip_entity_id(),
+            # What being home rests on while it is on. `door` is a credential
+            # at the front door with no device behind it yet: it expires on a
+            # clock, so it going off is not evidence that anybody left.
+            "presence": data.presence if data else None,
         }
 
     def _trip_entity_id(self) -> str | None:
