@@ -16,6 +16,7 @@ from .auth import (
     async_setup_welkom_auth,
     async_update_welkom_auth,
 )
+from .changes import follow_changes
 from .client import WelkomClient
 from .const import (
     CONF_ALLOW_BYPASS_LOGIN,
@@ -162,6 +163,11 @@ async def async_setup_entry(
         )
 
         await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
+
+        # Changes as they happen instead of on the next poll; see changes.py.
+        config_entry.async_create_background_task(
+            hass, follow_changes(coordinator), f"{DOMAIN} change stream"
+        )
 
     await _async_setup_auth(hass, config_entry)
     config_entry.async_on_unload(

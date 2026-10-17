@@ -318,6 +318,13 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
 
         return devices
 
+    async def async_refresh_fresh(self) -> None:
+        """Refresh now, reading past welkom's cache: welkom just said
+        something changed, and the worker that answers is rarely the one that
+        noticed."""
+        with self.client.fresh_reads():
+            await self.async_refresh()
+
     async def _async_update_data(self):
         try:
             return await self._fetch_data()

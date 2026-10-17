@@ -1,0 +1,154 @@
+"""Standalone checks for following welkom's change stream.
+
+Run with ``uv run python tests/check_changes.py``. Loaded by path, like the
+other checks: ``changes.py`` needs nothing from Home Assistant at runtime.
+
+What matters: every `changed` (and the `ready` that opens a stream) becomes
+exactly one fresh refresh; keepalive comments and data lines don't; a welkom
+from before the stream (404) is left alone instead of being retried every few
+seconds; and a dropped stream is reconnected.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+import importlib.util
+import pathlib
+import sys
+import types
+
+import aiohttp
+
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+_pkg = types.ModuleType("welkom")
+_pkg.__path__ = [str(_ROOT)]
+sys.modules["welkom"] = _pkg
+
+
+def _load(name: str):
+    spec = importlib.util.spec_from_file_location(
+        f"welkom.{name}", _ROOT / f"{name}.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[f"welkom.{name}"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+changes = _load("changes")
+
+
+def check(label: str, got: object, want: object) -> None:
+    status = "ok  " if got == want else "FAIL"
+    print(f"{status} {label}: got {got!r}, want {want!r}")
+    if got != want:
+        sys.exit(1)
+
+
+STREAM = (
+    b'event: ready\ndata: {"home": "oasis"}\n\n'
+    b": keepalive\n\n"
+    b'event: changed\r\ndata: {"home": "oasis"}\r\n\r\n'
+    b'data: {"orphan": true}\n\n'
+    b'event: changed\ndata: {"home": "oasis"}\n\n'
+)
+
+
+async def lines(blob: bytes) -> AsyncIterator[bytes]:
+    for line in blob.splitlines(keepends=True):
+        yield line
+
+
+async def names(blob: bytes) -> list[str]:
+    return [name async for name in changes.events(lines(blob))]
+
+
+class FakeClient:
+    """Plays one scripted outcome per connection attempt."""
+
+    def __init__(self, attempts: list[object]) -> None:
+        self.attempts = attempts
+        self.connects = 0
+
+    async def changes(self, home_id: str, read_timeout: float) -> AsyncIterator[str]:
+        self.connects += 1
+        outcome = self.attempts.pop(0) if self.attempts else asyncio.Event()
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if isinstance(outcome, asyncio.Event):
+            await outcome.wait()  # a stream that stays open and quiet
+            return
+        for name in outcome:  # type: ignore[union-attr]
+            yield name
+
+
+class FakeCoordinator:
+    def __init__(self, client: FakeClient) -> None:
+        self.client = client
+        self.homes = {"oasis": object()}
+        self.fresh_refreshes = 0
+
+    async def async_refresh_fresh(self) -> None:
+        self.fresh_refreshes += 1
+
+
+async def run(coordinator: FakeCoordinator, sleeps: list[float]) -> None:
+    """Run the follower until it settles into an idle stream."""
+
+    real_sleep = changes.asyncio.sleep
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    changes.asyncio.sleep = fake_sleep  # type: ignore[assignment]
+    try:
+        task = asyncio.ensure_future(changes.follow_changes(coordinator))
+        for _ in range(50):
+            await real_sleep(0)
+        task.cancel()
+    finally:
+        changes.asyncio.sleep = real_sleep
+
+
+async def main() -> None:
+    check(
+        "events: ready and changed, not keepalives or bare data",
+        await names(STREAM),
+        ["ready", "changed", "changed"],
+    )
+
+    client = FakeClient([["ready", "changed", "changed"]])
+    coordinator = FakeCoordinator(client)
+    sleeps: list[float] = []
+    await run(coordinator, sleeps)
+    check("each ready/changed is one fresh refresh", coordinator.fresh_refreshes, 3)
+
+    not_found = aiohttp.ClientResponseError(
+        request_info=None,  # type: ignore[arg-type]
+        history=(),
+        status=404,
+    )
+    client = FakeClient([not_found])
+    coordinator = FakeCoordinator(client)
+    sleeps = []
+    await run(coordinator, sleeps)
+    check(
+        "an old welkom (404) is retried hourly, not every few seconds",
+        sleeps[0],
+        changes.RETRY_UNSUPPORTED,
+    )
+
+    client = FakeClient([aiohttp.ClientConnectionError("gone"), ["ready"]])
+    coordinator = FakeCoordinator(client)
+    sleeps = []
+    await run(coordinator, sleeps)
+    check("a dropped stream reconnects", client.connects >= 2, True)
+    check("and refreshes when it does", coordinator.fresh_refreshes, 1)
+    check("after a short wait", sleeps[0], changes.RETRY_INITIAL)
+
+
+asyncio.run(main())

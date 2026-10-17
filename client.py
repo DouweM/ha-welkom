@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -16,6 +18,9 @@ class WelkomClient(BaseModel):
     home_id: str | None = None  # TODO: Move elsewhere? More a coordinator property?
 
     _session: aiohttp.ClientSession | None = None
+    # While above zero, presence reads skip welkom's 30-second cache: set
+    # around a refresh that a `changed` event triggered (see changes.py).
+    _fresh: int = 0
 
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
@@ -114,12 +119,36 @@ class WelkomClient(BaseModel):
     # aggregate returns a flat list with no way to say "all of it except that
     # one home". A travel router with a broken API would take the whole house's
     # presence down with it. Per home, each failure stays where it belongs.
+    @contextmanager
+    def fresh_reads(self) -> Iterator[None]:
+        """Within this, presence reads skip welkom's 30-second cache."""
+        self._fresh += 1
+        try:
+            yield
+        finally:
+            self._fresh -= 1
+
+    def _presence_url(self, home_id: str, path: str) -> str:
+        url = f"{self.home_url(home_id)}/{path}"
+        return f"{url}?fresh=true" if self._fresh else url
+
+    async def changes(self, home_id: str, read_timeout: float) -> AsyncIterator[str]:
+        """The event names welkom streams for a home; see changes.py."""
+        from .changes import events
+
+        async with self.session.get(
+            f"{self.home_url(home_id)}/changes",
+            timeout=aiohttp.ClientTimeout(total=None, sock_read=read_timeout),
+        ) as response:
+            async for event in events(response.content):
+                yield event
+
     async def connections(self, home_id: str) -> list[Connection]:
-        raw_connections = await self.request(f"{self.home_url(home_id)}/connections")
+        raw_connections = await self.request(self._presence_url(home_id, "connections"))
         return [Connection.model_validate(connection) for connection in raw_connections]
 
     async def connected_people(self, home_id: str) -> list[ConnectedPerson]:
-        raw_connected_people = await self.request(f"{self.home_url(home_id)}/people")
+        raw_connected_people = await self.request(self._presence_url(home_id, "people"))
         connected_people = [
             ConnectedPerson.model_validate(connected_person)
             for connected_person in raw_connected_people
