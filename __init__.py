@@ -48,6 +48,7 @@ from .const import (
     MAP_IMAGE_SCRIPT_URL,
 )
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
+from .gazetteer_store import async_setup_gazetteer
 from .images import WelkomImageView
 from .ping import WelkomPingView
 
@@ -196,6 +197,8 @@ async def async_setup_entry(
     platforms = _selected_platforms(config_entry)
     if platforms:
         await _async_setup_shared(hass)
+        # One gazetteer for every entry's trackers; loads in the background.
+        async_setup_gazetteer(hass)
 
         # TODO: Auto-create through entity?
         device_registry = dr.async_get(hass)

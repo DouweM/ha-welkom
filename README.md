@@ -83,6 +83,10 @@ The geocode comes from the companion app's *Geocoded Location* sensor, found on 
 
 Configured places take part in the same "tightest zone wins" rule as real zones. A polygon is worth the radius of the circle with its area; a geocode match is worth a nominal radius for the attribute (an area of interest is tighter than a sub-locality is tighter than a locality). So a 48 m school circle still beats the neighbourhood around it, and a real zone drawn smaller always wins. The name reaches three things at once: the tracker's state (and so `person.*` and any badge reading it), the trip sensor's stops and turns, and whatever composes sentences from either. Draw a small **passive** zone with the same name if you want an icon for it on the map; passive means the circle never claims anybody by geometry. (Its person count still follows the circle, not the name — HA counts by coordinates — so the marker is a picture, not a sensor.)
 
+Where no configured place matches, the tracker's state (not the trip's) falls back on the geocode's own words: its sub-locality, the colonia ("Lomas de Vista Hermosa"), else its locality, in Mexico City the alcaldía ("Cuajimalpa"), worth the same nominal radii. A real zone or polygon at least that tight still wins; the zone drawn around the whole city never does. The tracker also carries `colonia` and `alcaldia` attributes from the same geocode while `source` is `gps`.
+
+A phone doesn't geocode every fix, and in a car hardly any. Every geocode a tracker accepts is remembered against its position in a gazetteer shared by every phone (stored as `.storage/welkom.gazetteer`, one entry per ~25 m, at most 20,000, oldest out first; seeded once from the recorder's history of every `sensor.*_geocoded_location` when it starts empty). A fix without a geocode of its own borrows the nearest remembered one within its accuracy, between 150 m and 300 m, when that names it more tightly than the zones do; failing that, the neighbourhood the phone last geocoded within 300 m.
+
 ### Roaming homes
 
 A travel router is a home that moves. Mark it in welkom.yml and the integration places it by the phones connected to it:

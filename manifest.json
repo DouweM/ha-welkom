@@ -4,6 +4,9 @@
   "codeowners": [
     "@DouweM"
   ],
+  "after_dependencies": [
+    "recorder"
+  ],
   "config_flow": true,
   "dependencies": [
     "auth",

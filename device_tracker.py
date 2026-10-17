@@ -48,12 +48,16 @@ from .client import WelkomClient
 from .const import (
     AREA_LINGER,
     DOMAIN,
+    GAZETTEER_RADIUS_MAX,
+    GAZETTEER_RADIUS_MIN,
     GEOCODE_SLACK,
     GEOCODE_WAIT,
     GPS_MAX_AGE,
     WELKOM_HOLD,
 )
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
+from .gazetteer import search_radius
+from .gazetteer_store import async_get_gazetteer
 from .location import (
     Circle,
     Fix,
@@ -64,8 +68,16 @@ from .location import (
     placement_lingers,
 )
 from .models import Home, Person
-from .places import Geocode, GeocodedArea, lingering_area, recognise
+from .places import (
+    Geocode,
+    GeocodedArea,
+    lingering_area,
+    recognise,
+    tighter,
+    tracker_place,
+)
 from .roaming import Position, roaming_as_dict, roaming_from_dict
+from .trip import Place
 
 
 async def async_setup_entry(
@@ -242,6 +254,10 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         # The fix a wait last ran out on, which is named without waiting again.
         self._geocode_waited: object = None
         self._geocode_wait_cancel: Callable[[], None] | None = None
+        # The geocode the current name came from: the fix's own, or the
+        # nearest one the gazetteer remembers. Its colonia and alcaldía are
+        # attributes of their own.
+        self._named_by: Geocode | None = None
 
         self._attr_location_accuracy = 0
         self._async_update_attrs()
@@ -359,17 +375,43 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         self.async_write_ha_state()
 
     def _geocoded_area(self, fix: Fix, geocode: Geocode) -> GeocodedArea | None:
-        """The household place this geocode names, if the geocode is why."""
-        latitude = geocode.latitude or fix.latitude
-        longitude = geocode.longitude or fix.longitude
+        """The place this geocode names, if the geocode is why.
+
+        A household place, or failing one the geocode's own colonia or
+        alcaldía (see `places.tracker_place`): a colonia named a block ago is
+        as much better than the city as a household neighbourhood is, and
+        `lingering_area` keeps either no further than AREA_LINGER.
+        """
+        latitude, longitude = self._geocode_position(fix, geocode)
         places = self.coordinator.places
-        named = recognise(
-            places, latitude=latitude, longitude=longitude, geocode=geocode
-        )
         drawn = recognise(places, latitude=latitude, longitude=longitude, geocode=None)
+        named = tracker_place(
+            named=recognise(
+                places, latitude=latitude, longitude=longitude, geocode=geocode
+            ),
+            drawn=drawn,
+            geocode=geocode,
+        )
         if named is None or (drawn is not None and drawn.name == named.name):
             return None
         return GeocodedArea(place=named, latitude=latitude, longitude=longitude)
+
+    @staticmethod
+    def _geocode_position(fix: Fix, geocode: Geocode) -> tuple[float, float]:
+        """Where the geocode is about: its own Location, else the fix's."""
+        if geocode.latitude is None or geocode.longitude is None:
+            return fix.latitude, fix.longitude
+        return geocode.latitude, geocode.longitude
+
+    def _name(self, fix: Fix, geocode: Geocode | None) -> Place | None:
+        """What the tracker calls the fix, by this geocode: a household place,
+        else the tighter of the zones and the geocode's own colonia or
+        alcaldía. Trips keep `place_at`'s answer; this is the badge's."""
+        named = self.coordinator.place_at(fix, geocode, coarse=math.inf)
+        if geocode is None:
+            return named
+        drawn = self.coordinator.place_at(fix, None, coarse=math.inf)
+        return tracker_place(named=named, drawn=drawn, geocode=geocode)
 
     def _cancel_geocode_wait(self) -> None:
         if self._geocode_wait_cancel is not None:
@@ -606,18 +648,26 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             # a fix entirely inside the zone, staying takes one that may be.
             # The source stays "gps"; the room comes when welkom has them.
             was_home = not gps_in_charge or self._attr_state == STATE_HOME
+            gazetteer = async_get_gazetteer(self.hass) if self.hass else None
             if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
                 self._attr_state = STATE_HOME
                 self._area = None
+                self._named_by = geocode
             elif geocode is not None:
-                place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
+                place = self._name(fix, geocode)
                 self._attr_state = place.name if place else STATE_NOT_HOME
                 self._cancel_geocode_wait()
+                self._named_by = geocode
                 # What this geocode alone calls the spot, zones aside, so the
                 # fixes iOS doesn't geocode can keep it (see `lingering_area`).
                 # Every geocode replaces it, including one that names nothing:
                 # the newest geocode is the one to believe.
                 self._area = self._geocoded_area(fix, geocode)
+                if gazetteer is not None:
+                    # And for anybody's fix here that iOS won't geocode. The
+                    # same fix seen again (every welkom poll) is no news.
+                    latitude, longitude = self._geocode_position(fix, geocode)
+                    gazetteer.add(latitude, longitude, geocode, fix.at or now)
             elif (
                 gps_in_charge
                 and self._attr_state not in (None, STATE_HOME, STATE_NOT_HOME)
@@ -628,16 +678,38 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
                 # fix "CDMX" for a moment (2026-10-17, a walk to Chapu II).
                 pass
             else:
-                place = self.coordinator.place_at(fix, None, coarse=math.inf)
+                bare = self.coordinator.place_at(fix, None, coarse=math.inf)
+                # What somebody's phone said nearest here, if iOS didn't
+                # geocode this fix: driving, it rarely does (2026-10-17 21:07,
+                # Gaby 2.8 km from her last geocode, read as "CDMX"). Nearer
+                # evidence than where this phone last geocoded, so it goes
+                # first; and like that, only when it says more than `bare`.
+                # Never into `_area`: it is a borrowed name, not this phone's.
+                nearby = (
+                    gazetteer.nearest(
+                        fix.latitude,
+                        fix.longitude,
+                        search_radius(
+                            fix.accuracy,
+                            minimum=GAZETTEER_RADIUS_MIN,
+                            maximum=GAZETTEER_RADIUS_MAX,
+                        ),
+                    )
+                    if gazetteer is not None
+                    else None
+                )
+                self._named_by = nearby
+                borrowed = self._name(fix, nearby) if nearby is not None else None
                 place = (
-                    lingering_area(
+                    (borrowed if borrowed and tighter(borrowed, than=bare) else None)
+                    or lingering_area(
                         self._area,
                         latitude=fix.latitude,
                         longitude=fix.longitude,
-                        bare=place,
+                        bare=bare,
                         max_distance=AREA_LINGER,
                     )
-                    or place
+                    or bare
                 )
                 self._attr_state = place.name if place else STATE_NOT_HOME
             self._attr_latitude = fix.latitude
@@ -679,6 +751,13 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             attr["gps_tracker"] = self._gps_entity_id
             attr["source"] = self._source
             attr["held"] = self._holding
+
+        if self._source == "gps":
+            # What the geocoder calls the spot, whether or not that is the
+            # state: the map and the cards show both.
+            named_by = self._named_by
+            attr["colonia"] = named_by.first("sub_locality") if named_by else None
+            attr["alcaldia"] = named_by.first("locality") if named_by else None
 
         # Welkom's network view only describes the state while it is the state.
         data = self._held[0] if self._holding and self._held else self.data

@@ -260,3 +260,26 @@ GEOCODE_WAIT = 5.0
 # sub-locality, so the old name outlasts a boundary by a block at most, and the
 # next geocode puts it right.
 AREA_LINGER = 300.0
+
+# --- Gazetteer: what the phones' geocoders said, by where --------------------
+# See gazetteer.py. iOS rarely geocodes a phone in a car: at 21:07 UTC on
+# 2026-10-17 Gaby's fix on Lomas Virreyes was 2.8 km from her last geocode, and
+# read as "CDMX". Somebody's phone has geocoded that street before.
+#
+# How far a fix may be from a remembered geocode and still borrow it, at the
+# least. A street's width and a block either side: further and the next
+# colonia's geocode starts naming this one's streets.
+GAZETTEER_RADIUS_MIN = 150.0
+# ...widened to the fix's own accuracy, since a vague fix could be anywhere in
+# it, but never past this: a fix that vague is as good named by the city.
+# AREA_LINGER's reach, so the gazetteer never claims further than lingering does.
+GAZETTEER_RADIUS_MAX = 300.0
+# How many geocodes are kept, oldest out first. One per 25 m of road, so 500 km
+# of it: well over the household's usual roads, and two or three MB stored.
+GAZETTEER_MAX_ENTRIES = 20_000
+# Home Assistant's own store, shared by every welkom entry.
+GAZETTEER_STORAGE_KEY = f"{DOMAIN}.gazetteer"
+GAZETTEER_STORAGE_VERSION = 1
+# A geocode arrives every minute or so while somebody is out; writing a
+# megabytes-long file for each would be most of what the integration does.
+GAZETTEER_SAVE_DELAY = 60.0

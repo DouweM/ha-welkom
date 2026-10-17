@@ -93,6 +93,21 @@ def _values(raw: object) -> tuple[str, ...]:
     return tuple(out)
 
 
+def normalise_values(raw: object) -> dict[str, tuple[str, ...]]:
+    """Geocode values from anywhere -- stored, or written by hand -- the way
+    `Geocode.from_attributes` reads them: keys normalised, blanks dropped, and
+    only the attributes a matcher can ask about kept."""
+    if not isinstance(raw, Mapping):
+        return {}
+    values: dict[str, tuple[str, ...]] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or (key := _key(name)) not in GEOCODE_RADIUS:
+            continue
+        if found := _values(value):
+            values[key] = found
+    return values
+
+
 @dataclass(frozen=True)
 class Geocode:
     """What the phone's reverse geocoder said about a fix, normalised.
@@ -127,6 +142,11 @@ class Geocode:
 
     def get(self, attribute: str) -> tuple[str, ...]:
         return self.values.get(_key(attribute), ())
+
+    def first(self, attribute: str) -> str | None:
+        """The attribute's first value; None when the geocoder left it blank."""
+        found = self.get(attribute)
+        return found[0] if found else None
 
     def describes(self, latitude: float, longitude: float, slack: float) -> bool:
         """Whether this geocode is about the given position.
@@ -345,6 +365,62 @@ def lingering_area(
     reach = min(max_distance, area.place.radius)
     if distance(latitude, longitude, area.latitude, area.longitude) > reach:
         return None
-    if bare is not None and bare.radius <= area.place.radius:
+    if not tighter(area.place, than=bare):
         return None
     return area.place
+
+
+def tighter(place: Place, *, than: Place | None) -> bool:
+    """Whether `place` is better news than `than`, a fix's name without it.
+
+    Strictly smaller: a name only replaces one it says more than. Anything
+    beats nothing.
+    """
+    return than is None or place.radius < than.radius
+
+
+# --- what the geocoder calls it, when the household doesn't ------------------
+
+# The geocode's own names a tracker may fall back on, tightest first: the
+# colonia, then the alcaldía (in Mexico City, Apple's Locality is the borough).
+_FALLBACK_ATTRIBUTES = ("sub_locality", "locality")
+
+
+def geocoded_name(geocode: Geocode | None) -> Place | None:
+    """The neighbourhood or borough the geocode itself names, if it names one.
+
+    Worth the radius of the attribute it came from, like a matcher on that
+    attribute would be, so it ranks against zones in the same units. Blank and
+    "N/A" values are absent, the way they are everywhere else here.
+    """
+    if geocode is None:
+        return None
+    for attribute in _FALLBACK_ATTRIBUTES:
+        if (name := geocode.first(attribute)) is not None:
+            return Place(name=name, radius=GEOCODE_RADIUS[attribute])
+    return None
+
+
+def tracker_place(
+    *, named: Place | None, drawn: Place | None, geocode: Geocode | None
+) -> Place | None:
+    """What a tracker calls a fix: a household place, else the tighter of the
+    drawn shapes and the geocode's own colonia or alcaldía.
+
+    `named` is the tightest place with the geocode (zones, polygons and
+    matchers), `drawn` the same without it (zones and polygons only). A place
+    the household matched by geocode is the household's word for the spot and
+    always stands. Otherwise a real circle or polygon only stands when it is
+    at least as tight as the geocoder's own name -- a 48 m school beats the
+    colonia, the 15.6 km zone around the whole city never does. On 2026-10-17
+    at 21:17 UTC the phones were in Lomas de Vista Hermosa, which no household
+    place names, and read as "CDMX".
+    """
+    if named is not None and (drawn is None or named.name != drawn.name):
+        return named
+    fallback = geocoded_name(geocode)
+    if fallback is None:
+        return named
+    if drawn is not None and drawn.radius <= fallback.radius:
+        return drawn
+    return fallback

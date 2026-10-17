@@ -360,4 +360,125 @@ check(
     None,
 )
 
+# --- the geocoder's own name, when the household has none ---------------------------
+# 2026-10-17 21:17 UTC: both phones matched their own geocodes exactly, in a
+# colonia no household place names, and read as "CDMX".
+VISTA_HERMOSA = Geocode.from_attributes(
+    {
+        "Sub Locality": "Lomas de Vista Hermosa",
+        "Locality": "Cuajimalpa",
+        "Sub Administrative Area": "Mexico City",
+        "Administrative Area": "CDMX",
+        "Areas Of Interest": "N/A",
+        "Location": [19.3946, -99.2563],
+    }
+)
+NO_COLONIA = Geocode.from_attributes(
+    {"Sub Locality": "N/A", "Locality": "Cuajimalpa", "Administrative Area": "CDMX"}
+)
+NOTHING = Geocode.from_attributes(
+    {"Sub Locality": "n/a", "Locality": " ", "Administrative Area": "CDMX"}
+)
+city = Place(name="CDMX", radius=15600.0)
+school = Place(name="School", radius=48.0)
+
+
+def badge(named: Place | None, drawn: Place | None, geo: Geocode | None):
+    place = places.tracker_place(named=named, drawn=drawn, geocode=geo)
+    return (place.name, place.radius) if place else None
+
+
+check(
+    "a colonia nobody configured beats the city",
+    badge(city, city, VISTA_HERMOSA),
+    ("Lomas de Vista Hermosa", 1000.0),
+)
+check(
+    "with no colonia, the alcaldía",
+    badge(city, city, NO_COLONIA),
+    ("Cuajimalpa", 5000.0),
+)
+check(
+    "blanks and N/A are absent: the city stands",
+    badge(city, city, NOTHING),
+    ("CDMX", 15600.0),
+)
+check("no geocode, no fallback", badge(city, city, None), ("CDMX", 15600.0))
+check(
+    "nothing drawn at all",
+    badge(None, None, VISTA_HERMOSA),
+    ("Lomas de Vista Hermosa", 1000.0),
+)
+check(
+    "a tighter zone still wins", badge(school, school, VISTA_HERMOSA), ("School", 48.0)
+)
+check(
+    "a zone as tight as the colonia wins the tie",
+    badge(
+        Place(name="Park", radius=1000.0),
+        Place(name="Park", radius=1000.0),
+        VISTA_HERMOSA,
+    ),
+    ("Park", 1000.0),
+)
+check(
+    "a zone wider than the colonia loses to it",
+    badge(
+        Place(name="Park", radius=2000.0),
+        Place(name="Park", radius=2000.0),
+        VISTA_HERMOSA,
+    ),
+    ("Lomas de Vista Hermosa", 1000.0),
+)
+check(
+    "but beats the wider alcaldía",
+    badge(
+        Place(name="Park", radius=2000.0), Place(name="Park", radius=2000.0), NO_COLONIA
+    ),
+    ("Park", 2000.0),
+)
+check(
+    "a household place matched by geocode always stands, even a borough-wide one",
+    badge(Place(name="Cuaji", radius=5000.0), city, VISTA_HERMOSA),
+    ("Cuaji", 5000.0),
+)
+molino = recognise(SPECS, latitude=19.4228, longitude=-99.2050, geocode=None)
+check(
+    "a hand-drawn polygon tighter than the colonia wins",
+    badge(molino, molino, VISTA_HERMOSA),
+    ("Molino", molino.radius if molino else None),
+)
+check(
+    "through recognise: a configured colonia is the household's name, not Apple's",
+    badge(
+        recognise(SPECS, latitude=19.41, longitude=-99.20, geocode=AT_HOME),
+        recognise(SPECS, latitude=19.41, longitude=-99.20, geocode=None),
+        AT_HOME,
+    ),
+    ("Lomas", 1000.0),
+)
+check(
+    "geocoded_name reads the first value",
+    places.geocoded_name(Geocode(values={"sub_locality": ("Uno", "Dos")})),
+    Place(name="Uno", radius=1000.0),
+)
+
+# --- tighter: strictly smaller, anything beats nothing --------------------------
+check("anything beats nothing", places.tighter(city, than=None), True)
+check(
+    "a tie is no news",
+    places.tighter(Place(name="A", radius=1000.0), than=Place(name="B", radius=1000.0)),
+    False,
+)
+check(
+    "smaller is",
+    places.tighter(Place(name="A", radius=999.0), than=Place(name="B", radius=1000.0)),
+    True,
+)
+check(
+    "larger is not",
+    places.tighter(Place(name="A", radius=1001.0), than=Place(name="B", radius=1000.0)),
+    False,
+)
+
 print("all place checks passed")
