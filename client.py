@@ -27,6 +27,12 @@ class WelkomClient(BaseModel):
     # Every open fresh scope's `after`: scopes from different homes' streams
     # overlap and end in any order, so the newest is taken from all of them.
     _fresh_afters: list[float] = []
+    # The newest `after` a refresh has used. Every read after it asks for at
+    # least that recent too: welkom's 17 workers each cache their own, so a
+    # plain poll landing on one whose read predates a change would hand back
+    # the state from before it. 2026-10-17 18:32: Douwe home at :19, gone at
+    # :29 on a plain poll, home again at :50.
+    _floor: float | None = None
 
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
@@ -138,12 +144,15 @@ class WelkomClient(BaseModel):
             self._fresh -= 1
             if after is not None:
                 self._fresh_afters.remove(after)
+                if self._floor is None or after > self._floor:
+                    self._floor = after
 
     def _presence_url(self, home_id: str, path: str) -> str:
         url = f"{self.home_url(home_id)}/{path}"
-        if self._fresh_afters:
+        afters = [*self._fresh_afters, *([self._floor] if self._floor else [])]
+        if afters:
             # `fresh` too, for a welkom that doesn't know `after`.
-            return f"{url}?fresh=true&after={max(self._fresh_afters)}"
+            return f"{url}?fresh=true&after={max(afters)}"
         return f"{url}?fresh=true" if self._fresh else url
 
     async def changes(

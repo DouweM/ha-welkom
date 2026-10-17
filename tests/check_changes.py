@@ -244,11 +244,30 @@ def check_fresh_urls() -> None:
     )
     c.__exit__(None, None, None)
     check(
-        "and nothing leaks into the next poll",
+        "the next plain poll still asks for at least the newest change",
         url(),
+        "https://w/api/homes/oasis/people?fresh=true&after=3.0",
+    )
+    older = client.fresh_reads(after=2.5)
+    older.__enter__()
+    older.__exit__(None, None, None)
+    check(
+        "a late, older refresh doesn't lower it",
+        url(),
+        "https://w/api/homes/oasis/people?fresh=true&after=3.0",
+    )
+    with client.fresh_reads():
+        check(
+            "a fresh scope without an after keeps the floor",
+            url(),
+            "https://w/api/homes/oasis/people?fresh=true&after=3.0",
+        )
+    check("clients don't share their scopes", other._fresh_afters, [])
+    check(
+        "nor their floor",
+        other._presence_url("oasis", "people"),
         "https://w/api/homes/oasis/people",
     )
-    check("clients don't share their scopes", other._fresh_afters, [])
 
 
 check_fresh_urls()
