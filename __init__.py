@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ID, CONF_URL, Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+    callback,
+)
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
 from .auth import (
@@ -17,7 +25,7 @@ from .auth import (
     async_update_welkom_auth,
 )
 from .changes import follow_changes
-from .client import WelkomClient
+from .client import WelkomClient, WelkomRefused
 from .const import (
     CONF_ALLOW_BYPASS_LOGIN,
     CONF_AUTH_ENABLED,
@@ -85,6 +93,42 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
 
     hass.services.async_register(
         DOMAIN, "set_device_suspended", _handle_set_device_suspended
+    )
+
+    async def _handle_report_sighting(call: ServiceCall) -> ServiceResponse:
+        """Tell welkom a person was seen in a room, e.g. by a door credential.
+
+        Sent by the integration so it goes with the integration's own access
+        to welkom. Raises with welkom's status and reason when it refuses, so
+        a failure shows in the calling automation's trace."""
+        home_id = call.data.get("home")
+        at = call.data.get("at")
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if not isinstance(coordinator, WelkomCoordinator):
+                continue
+            home = home_id or coordinator.home.id
+            if home not in await coordinator.client.homes:
+                continue
+            try:
+                sighting = await coordinator.client.report_sighting(
+                    home,
+                    call.data["person"],
+                    call.data["room"],
+                    float(at) if at is not None else time.time(),
+                    call.data.get("source", "door"),
+                )
+            except WelkomRefused as e:
+                raise HomeAssistantError(str(e)) from e
+            await coordinator.async_request_refresh()
+            return {"sighting": sighting}
+        raise HomeAssistantError(f"No welkom entry knows home {home_id!r}")
+
+    hass.services.async_register(
+        DOMAIN,
+        "report_sighting",
+        _handle_report_sighting,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     await hass.http.async_register_static_paths(

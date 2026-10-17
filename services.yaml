@@ -28,6 +28,52 @@ set_device_suspended:
       selector:
         boolean:
 
+report_sighting:
+  name: Report sighting
+  description: >-
+    Tell welkom a person was seen in a room of a home without a device, e.g. a
+    keypad code or Home Key at the front door. welkom holds them there (15
+    minutes) until a device of theirs shows up, and marks it `presence: door`
+    on their entities so its expiry isn't read as leaving. Presence only: it
+    never changes a role. Fails with welkom's reason when refused.
+  fields:
+    person:
+      name: Person
+      description: The welkom person id.
+      required: true
+      example: araceli
+      selector:
+        text:
+    room:
+      name: Room
+      description: The welkom room id, in that home.
+      required: true
+      example: garage
+      selector:
+        text:
+    at:
+      name: At
+      description: When they were seen, as a Unix timestamp. Defaults to now.
+      example: 1792261932
+      selector:
+        number:
+          mode: box
+          step: any
+    home:
+      name: Home
+      description: The welkom home id. Defaults to the integration's main home.
+      example: oasis
+      selector:
+        text:
+    source:
+      name: Source
+      description: What saw them. Only "door" for now.
+      default: door
+      selector:
+        select:
+          options:
+            - door
+
 locate:
   name: Locate
   description: >-

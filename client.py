@@ -13,6 +13,15 @@ if TYPE_CHECKING:
     from .changes import Event
 
 
+class WelkomRefused(Exception):
+    """welkom answered a write with an error status."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(f"welkom refused ({status}): {detail}")
+        self.status = status
+        self.detail = detail
+
+
 class WelkomClient(BaseModel):
     """A Welkom client."""
 
@@ -214,6 +223,25 @@ class WelkomClient(BaseModel):
             f"{self.url}/api/devices/{quote(device, safe='')}/suspended",
             json={"suspended": suspended},
         )
+
+    async def report_sighting(
+        self, home_id: str, person: str, room: str, at: float, source: str
+    ) -> dict[str, Any]:
+        """Tell welkom somebody was seen in a room of a home, with no device.
+
+        A credential at the front door names a person minutes before their
+        phone joins the WiFi, if it ever does. welkom holds them in that room
+        until a device of theirs shows up or the hold runs out. Raises on a
+        refusal, with welkom's reason in the message."""
+        response = await self.session.post(
+            f"{self.home_url(home_id)}/sightings",
+            json={"person": person, "room": room, "at": at, "source": source},
+            raise_for_status=False,
+        )
+        if response.status >= 400:
+            detail = await response.text()
+            raise WelkomRefused(response.status, detail)
+        return await response.json()
 
     @property
     def unique_id(self) -> str:
