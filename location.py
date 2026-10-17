@@ -118,6 +118,30 @@ def placement_holds(
     return fix_in_circle(fix, home)
 
 
+def fix_at_home(home: Circle | None, fix: Fix, *, was_home: bool) -> bool:
+    """Whether the phone, speaking for itself, has the person at home.
+
+    For when welkom has nobody to place: the phone has walked in the door
+    before it has rejoined the WiFi, or it dozed off the WiFi long enough for
+    the room to be let go. The person is home, just not in any room yet, and
+    no neighbourhood the geocoder puts the house in is a better name for it.
+
+    Hysteretic, the way ``placement_holds`` is, but keyed on what the tracker
+    last *said* rather than on who said it, because the phone keeps speaking
+    after it has them home. Coming in (``was_home`` False) takes a fix that
+    lies *entirely* inside the zone, so a blurry fix from the street outside
+    doesn't put them on the sofa. Once home, they stay home while a fix may
+    still be inside: a phone indoors often reports accuracies wider than the
+    zone itself, which could never be "entirely inside" and would otherwise
+    throw them back out on the next fix from the same spot.
+    """
+    if home is None:
+        return False
+    if was_home:
+        return fix_in_circle(fix, home)
+    return fix_clearly_in_circle(fix, home)
+
+
 def placement_lingers(
     home: Circle | None, fix: Fix | None, since: timedelta, max_hold: timedelta
 ) -> bool:

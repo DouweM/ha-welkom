@@ -171,6 +171,67 @@ check(
     True,
 )
 
+# --- at home by the phone alone ---------------------------------------------
+# Walking in, the phone has the person inside the home zone a minute or two
+# before welkom sees it on the WiFi. The home zone is not a place `place_at`
+# names, so the tracker used to read as the neighbourhood the house is in. It
+# is home without a room: entered on a fix entirely inside the zone, kept
+# while a fix may still be inside.
+at_home = location.fix_at_home
+street = fix_at(64, 23)
+check(
+    "64m/23m in the street: not coming home yet",
+    at_home(HOME, street, was_home=False),
+    False,
+)
+check(
+    "...but not leaving either, once home", at_home(HOME, street, was_home=True), True
+)
+check(
+    "79m/29m from the street stays out",
+    at_home(HOME, blurry_out, was_home=False),
+    False,
+)
+check("90m/35m is out, home or not", at_home(HOME, leaving, was_home=True), False)
+check("no home zone: never home", at_home(None, back_inside, was_home=True), False)
+
+
+def walk(fixes: list[object], was_home: bool = False) -> list[bool]:
+    """The tracker's rule over successive fixes: each answer feeds the next."""
+    said = []
+    for fix in fixes:
+        was_home = at_home(HOME, fix, was_home=was_home)
+        said.append(was_home)
+    return said
+
+
+# The approach: the street, the gate, then indoors where the phone's
+# accuracy balloons past the zone's own radius.
+check(
+    "coming in: street, gate, indoors",
+    walk(
+        [fix_at(64, 23), fix_at(27, 24), fix_at(10, 12), fix_at(23, 35), fix_at(23, 35)]
+    ),
+    [False, True, True, True, True],
+)
+check(
+    "indoors at 65m accuracy keeps them home, tick after tick",
+    walk([fix_at(15, 10), fix_at(15, 65), fix_at(15, 65), fix_at(30, 65)]),
+    [True, True, True, True],
+)
+check(
+    "...but never brings them home on its own",
+    walk([fix_at(15, 65), fix_at(23, 35)]),
+    [False, False],
+)
+check(
+    "walking out: home until no fix could be inside",
+    walk(
+        [fix_at(20, 15), fix_at(64, 23), fix_at(90, 20), fix_at(50, 20)], was_home=True
+    ),
+    [True, True, False, False],
+)
+
 # --- gps_tracker_entity_id: option wins, welkom attr is the fallback -----------
 resolve = const.gps_tracker_entity_id
 OPTS = {const.CONF_PERSON_GPS_TRACKERS: {"douwe": "device_tracker.douwe_s_iphone"}}

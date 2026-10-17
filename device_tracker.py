@@ -16,6 +16,7 @@ from homeassistant.const import (
     ATTR_GPS_ACCURACY,
     ATTR_LATITUDE,
     ATTR_LONGITUDE,
+    STATE_HOME,
     STATE_NOT_HOME,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
@@ -43,7 +44,14 @@ from homeassistant.util import dt as dt_util
 from .client import WelkomClient
 from .const import DOMAIN, GEOCODE_SLACK, GPS_MAX_AGE, WELKOM_HOLD
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
-from .location import Circle, Fix, fix_in_circle, placement_holds, placement_lingers
+from .location import (
+    Circle,
+    Fix,
+    fix_at_home,
+    fix_in_circle,
+    placement_holds,
+    placement_lingers,
+)
 from .models import Home, Person
 from .places import Geocode
 from .roaming import Position, roaming_as_dict, roaming_from_dict
@@ -490,11 +498,26 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             # geocoder put them in -- the same answer a trip would give for
             # this fix, so the badge, the stop and the card never disagree.
             # `person.*` copies this state, which is how "Roma" reaches the
-            # dashboard without a zone being drawn. Nothing recognised leaves
-            # it to Home Assistant's own zone logic, which says `not_home` or
-            # the city.
-            place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
-            self._attr_state = place.name if place else None
+            # dashboard without a zone being drawn. `place_at` looks at every
+            # active zone but `zone.home`, the city included, so nothing
+            # recognised is `not_home` -- never left to Home Assistant's own
+            # zone logic, whose "might be in it" rule would call a blurry fix
+            # from the street `home`.
+            #
+            # Home is decided here instead. It isn't a place to name a trip
+            # by, so `place_at` skips it, and a fix inside it used to read as
+            # the neighbourhood the house is in for the minute or two between
+            # the phone walking in the door and welkom seeing it on the WiFi.
+            # That is `home`, just without a room. Hysteretic on what this
+            # tracker last said (see `location.fix_at_home`): coming in takes
+            # a fix entirely inside the zone, staying takes one that may be.
+            # The source stays "gps"; the room comes when welkom has them.
+            was_home = not gps_in_charge or self._attr_state == STATE_HOME
+            if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
+                self._attr_state = STATE_HOME
+            else:
+                place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
+                self._attr_state = place.name if place else STATE_NOT_HOME
             self._attr_latitude = fix.latitude
             self._attr_longitude = fix.longitude
             self._attr_location_accuracy = fix.accuracy
