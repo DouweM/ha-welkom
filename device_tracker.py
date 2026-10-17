@@ -49,6 +49,7 @@ from .location import (
     Fix,
     fix_at_home,
     fix_in_circle,
+    fix_places_within_home,
     placement_holds,
     placement_lingers,
 )
@@ -473,6 +474,18 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             self._attr_longitude = data.longitude
             self._attr_location_accuracy = 0
             self._attr_in_zones = data.in_zones
+            if (
+                fix
+                # Anchored on the home itself: no room, or a room without a
+                # zone of its own (`_place` puts both at the home's center).
+                and data.in_zones[:1] == [data.home_zone_id]
+                and fix_places_within_home(self._home_circle(data), fix, GPS_MAX_AGE)
+            ):
+                # The phone knows where in the house better than the home
+                # zone's center does. State and zones still come from welkom.
+                self._attr_latitude = fix.latitude
+                self._attr_longitude = fix.longitude
+                self._attr_location_accuracy = fix.accuracy
             if (roaming := self.coordinator.roaming(data.home.id)) is not None:
                 # On a travel router: a fresh fix from this phone is a fix on
                 # the router, and the router's position is theirs.

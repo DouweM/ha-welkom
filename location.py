@@ -142,6 +142,26 @@ def fix_at_home(home: Circle | None, fix: Fix, *, was_home: bool) -> bool:
     return fix_clearly_in_circle(fix, home)
 
 
+def fix_places_within_home(
+    home: Circle | None, fix: Fix | None, max_age: timedelta
+) -> bool:
+    """Whether the phone's fix says better than welkom *where* in the home they are.
+
+    Welkom with a room puts the person at that room's zone. Without one (seen
+    only by DNS, or on a device whose AP has no room), all it has is the home
+    zone's center, somewhere in the middle of the house. A fresh fix from
+    inside the zone is closer to the truth than that, so the map should show
+    it. The fix's own center has to be inside: a blurry fix that merely
+    overlaps the zone would put someone who is home out in the street.
+    """
+    if home is None or fix is None or fix.age > max_age:
+        return False
+    return (
+        distance(fix.latitude, fix.longitude, home.latitude, home.longitude)
+        <= home.radius
+    )
+
+
 def placement_lingers(
     home: Circle | None, fix: Fix | None, since: timedelta, max_hold: timedelta
 ) -> bool:

@@ -196,6 +196,26 @@ check("90m/35m is out, home or not", at_home(HOME, leaving, was_home=True), Fals
 check("no home zone: never home", at_home(None, back_inside, was_home=True), False)
 
 
+# --- where in the home, when welkom has no room ----------------------------
+# 2026-10-17 17:34: DNS put Douwe home with no room, and the map pinned him to
+# the home zone's center while his phone's fix had the right end of the house.
+within = location.fix_places_within_home
+check("a fresh fix inside: show it", within(HOME, fix_at(10, 17), MAX_AGE), True)
+check("blurry but centred inside: show it", within(HOME, fix_at(10, 80), MAX_AGE), True)
+check(
+    "centred in the street: keep the home",
+    within(HOME, fix_at(64, 23), MAX_AGE),
+    False,
+)
+check(
+    "stale fix: keep the home",
+    within(HOME, fix_at(10, 17, age=timedelta(hours=1)), MAX_AGE),
+    False,
+)
+check("no fix", within(HOME, None, MAX_AGE), False)
+check("no home zone", within(None, fix_at(10, 17), MAX_AGE), False)
+
+
 def walk(fixes: list[object], was_home: bool = False) -> list[bool]:
     """The tracker's rule over successive fixes: each answer feeds the next."""
     said = []
