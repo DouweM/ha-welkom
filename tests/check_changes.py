@@ -12,8 +12,10 @@ seconds; and a dropped stream is reconnected.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 import importlib.util
+import logging
 import pathlib
 import sys
 import types
@@ -64,6 +66,23 @@ async def lines(blob: bytes) -> AsyncIterator[bytes]:
 
 async def names(blob: bytes) -> list[str]:
     return [name async for name in changes.events(lines(blob))]
+
+
+@contextmanager
+def capture_warnings() -> Iterator[list[logging.LogRecord]]:
+    records: list[logging.LogRecord] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno == logging.WARNING:
+                records.append(record)
+
+    handler = Collect()
+    changes._LOGGER.addHandler(handler)
+    try:
+        yield records
+    finally:
+        changes._LOGGER.removeHandler(handler)
 
 
 class FakeClient:
@@ -149,6 +168,34 @@ async def main() -> None:
     check("a dropped stream reconnects", client.connects >= 2, True)
     check("and refreshes when it does", coordinator.fresh_refreshes, 1)
     check("after a short wait", sleeps[0], changes.RETRY_INITIAL)
+
+    client = FakeClient([["ready"], ["ready"], ["ready"]])
+    coordinator = FakeCoordinator(client)
+    sleeps = []
+    await run(coordinator, sleeps)
+    check(
+        "a stream that dies straight after ready backs off",
+        sleeps[:3],
+        [changes.RETRY_INITIAL, changes.RETRY_INITIAL * 2, changes.RETRY_INITIAL * 4],
+    )
+
+    client = FakeClient([UnicodeDecodeError("utf-8", b"", 0, 1, "bad"), ["ready"]])
+    coordinator = FakeCoordinator(client)
+    sleeps = []
+    await run(coordinator, sleeps)
+    check("an unexpected error doesn't end the follower", client.connects >= 2, True)
+
+    forbidden = aiohttp.ClientResponseError(
+        request_info=None,  # type: ignore[arg-type]
+        history=(),
+        status=403,
+    )
+    client = FakeClient([forbidden, forbidden, forbidden])
+    coordinator = FakeCoordinator(client)
+    sleeps = []
+    with capture_warnings() as warnings:
+        await run(coordinator, sleeps)
+    check("a refusal is warned about once, not every retry", len(warnings), 1)
 
 
 asyncio.run(main())
