@@ -360,111 +360,110 @@ check(
     None,
 )
 
-# --- the geocoder's own name, when the household has none ---------------------------
+# --- the geocode's own colonia and municipality --------------------------------------
 # 2026-10-17 21:17 UTC: both phones matched their own geocodes exactly, in a
-# colonia no household place names, and read as "CDMX".
+# colonia no household place names.
 VISTA_HERMOSA = Geocode.from_attributes(
     {
         "Sub Locality": "Lomas de Vista Hermosa",
         "Locality": "Cuajimalpa",
         "Sub Administrative Area": "Mexico City",
         "Administrative Area": "CDMX",
+        "ISO Country Code": "MX",
         "Areas Of Interest": "N/A",
         "Location": [19.3946, -99.2563],
     }
 )
-NO_COLONIA = Geocode.from_attributes(
-    {"Sub Locality": "N/A", "Locality": "Cuajimalpa", "Administrative Area": "CDMX"}
+# Across the state line: Apple files the municipio a level up.
+JESUS_DEL_MONTE = Geocode.from_attributes(
+    {
+        "Sub Locality": "Jesús del Monte",
+        "Locality": "Huixquilucan de Degollado",
+        "Sub Administrative Area": "Huixquilucan",
+        "Administrative Area": "Edo. Méx.",
+        "ISO Country Code": "MX",
+    }
 )
-NOTHING = Geocode.from_attributes(
-    {"Sub Locality": "n/a", "Locality": " ", "Administrative Area": "CDMX"}
+NEW_YORK = Geocode.from_attributes(
+    {
+        "Sub Locality": "Midtown",
+        "Locality": "New York",
+        "Sub Administrative Area": "New York County",
+        "Administrative Area": "NY",
+        "ISO Country Code": "US",
+    }
 )
-city = Place(name="CDMX", radius=15600.0)
-school = Place(name="School", radius=48.0)
+BLANK_COLONIA = Geocode.from_attributes(
+    {"Sub Locality": "N/A", "Locality": " ", "Administrative Area": "CDMX"}
+)
 
-
-def badge(named: Place | None, drawn: Place | None, geo: Geocode | None):
-    place = places.tracker_place(named=named, drawn=drawn, geocode=geo)
-    return (place.name, place.radius) if place else None
-
-
+check("the colonia", places.colonia(VISTA_HERMOSA), "Lomas de Vista Hermosa")
+check("an alcaldía is the Locality", places.municipality(VISTA_HERMOSA), "Cuajimalpa")
 check(
-    "a colonia nobody configured beats the city",
-    badge(city, city, VISTA_HERMOSA),
-    ("Lomas de Vista Hermosa", 1000.0),
+    "across the line, the colonia", places.colonia(JESUS_DEL_MONTE), "Jesús del Monte"
 )
 check(
-    "with no colonia, the alcaldía",
-    badge(city, city, NO_COLONIA),
-    ("Cuajimalpa", 5000.0),
+    "a municipio is the Sub Administrative Area",
+    places.municipality(JESUS_DEL_MONTE),
+    "Huixquilucan",
 )
 check(
-    "blanks and N/A are absent: the city stands",
-    badge(city, city, NOTHING),
-    ("CDMX", 15600.0),
-)
-check("no geocode, no fallback", badge(city, city, None), ("CDMX", 15600.0))
-check(
-    "nothing drawn at all",
-    badge(None, None, VISTA_HERMOSA),
-    ("Lomas de Vista Hermosa", 1000.0),
-)
-check(
-    "a tighter zone still wins", badge(school, school, VISTA_HERMOSA), ("School", 48.0)
-)
-check(
-    "a zone as tight as the colonia wins the tie",
-    badge(
-        Place(name="Park", radius=1000.0),
-        Place(name="Park", radius=1000.0),
-        VISTA_HERMOSA,
+    "a state spelled out counts",
+    places.municipality(
+        Geocode(
+            values={
+                "administrative_area": ("Estado de México",),
+                "sub_administrative_area": ("Naucalpan de Juárez",),
+            }
+        )
     ),
-    ("Park", 1000.0),
+    "Naucalpan de Juárez",
 )
 check(
-    "a zone wider than the colonia loses to it",
-    badge(
-        Place(name="Park", radius=2000.0),
-        Place(name="Park", radius=2000.0),
-        VISTA_HERMOSA,
+    "Mexico City spelled out counts, in any case",
+    places.municipality(
+        Geocode(
+            values={
+                "administrative_area": ("ciudad de méxico",),
+                "locality": ("Coyoacán",),
+            }
+        )
     ),
-    ("Lomas de Vista Hermosa", 1000.0),
+    "Coyoacán",
+)
+check("abroad, a colonia still", places.colonia(NEW_YORK), "Midtown")
+check("but no municipality", places.municipality(NEW_YORK), None)
+check("N/A is no colonia", places.colonia(BLANK_COLONIA), None)
+check("nor a blank alcaldía", places.municipality(BLANK_COLONIA), None)
+check(
+    "no state, no municipality",
+    places.municipality(Geocode(values={"locality": ("Cuajimalpa",)})),
+    None,
 )
 check(
-    "but beats the wider alcaldía",
-    badge(
-        Place(name="Park", radius=2000.0), Place(name="Park", radius=2000.0), NO_COLONIA
-    ),
-    ("Park", 2000.0),
+    "no geocode, neither",
+    (places.colonia(None), places.municipality(None)),
+    (None, None),
 )
 check(
-    "a household place matched by geocode always stands, even a borough-wide one",
-    badge(Place(name="Cuaji", radius=5000.0), city, VISTA_HERMOSA),
-    ("Cuaji", 5000.0),
+    "the first of several values",
+    places.colonia(Geocode(values={"sub_locality": ("Uno", "Dos")})),
+    "Uno",
 )
-molino = recognise(SPECS, latitude=19.4228, longitude=-99.2050, geocode=None)
+# The state is never the geocode's raw words: a colonia nobody configured
+# names nothing, so no zone -- the Airport, the city -- can lose to it.
 check(
-    "a hand-drawn polygon tighter than the colonia wins",
-    badge(molino, molino, VISTA_HERMOSA),
-    ("Molino", molino.radius if molino else None),
-)
-check(
-    "through recognise: a configured colonia is the household's name, not Apple's",
-    badge(
-        recognise(SPECS, latitude=19.41, longitude=-99.20, geocode=AT_HOME),
-        recognise(SPECS, latitude=19.41, longitude=-99.20, geocode=None),
-        AT_HOME,
-    ),
-    ("Lomas", 1000.0),
-)
-check(
-    "geocoded_name reads the first value",
-    places.geocoded_name(Geocode(values={"sub_locality": ("Uno", "Dos")})),
-    Place(name="Uno", radius=1000.0),
+    "an unconfigured colonia is no household place",
+    recognise(SPECS, latitude=19.3946, longitude=-99.2563, geocode=VISTA_HERMOSA),
+    None,
 )
 
 # --- tighter: strictly smaller, anything beats nothing --------------------------
-check("anything beats nothing", places.tighter(city, than=None), True)
+check(
+    "anything beats nothing",
+    places.tighter(Place(name="CDMX", radius=15600.0), than=None),
+    True,
+)
 check(
     "a tie is no news",
     places.tighter(Place(name="A", radius=1000.0), than=Place(name="B", radius=1000.0)),

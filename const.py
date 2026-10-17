@@ -280,6 +280,11 @@ GAZETTEER_MAX_ENTRIES = 20_000
 # Home Assistant's own store, shared by every welkom entry.
 GAZETTEER_STORAGE_KEY = f"{DOMAIN}.gazetteer"
 GAZETTEER_STORAGE_VERSION = 1
+# Which seed from recorder history the stored entries include. Stored beside
+# them, so a seed is retried until one has actually landed; bump it to read
+# history in again.
+GAZETTEER_SEED_VERSION = 1
 # A geocode arrives every minute or so while somebody is out; writing a
-# megabytes-long file for each would be most of what the integration does.
+# megabytes-long file for each would be most of what the integration does. At
+# most this long after the first unwritten one, however many follow it.
 GAZETTEER_SAVE_DELAY = 60.0

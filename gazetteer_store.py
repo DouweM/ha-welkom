@@ -1,15 +1,16 @@
 """The integration's one gazetteer: loaded, saved, and seeded from history.
 
 `gazetteer.py` holds the geocodes; this keeps them across restarts in Home
-Assistant's storage and, the first time there is nothing stored, fills them
-from the recorder's history of every phone's geocoded-location sensor -- ten
-days of the household's driving, on Oasis's `purge_keep_days`.
+Assistant's storage and, until it has once succeeded, fills them from the
+recorder's history of every phone's geocoded-location sensor -- ten days of
+the household's driving, on Oasis's `purge_keep_days`.
 
 None of it may hold up the event loop: the UniFi integration once stalled it
 for seconds at a time and every automation in the house with it. Reading and
 writing the store, building the index and querying the recorder all happen in
 an executor, and setup never waits for any of them -- until the load lands, the
-gazetteer is merely empty, which is how it started anyway.
+gazetteer is merely empty, which is how it started anyway. Nothing is written
+until it has landed, though: see `gazetteer.SaveSchedule`.
 """
 
 from __future__ import annotations
@@ -30,10 +31,11 @@ from .const import (
     DOMAIN,
     GAZETTEER_MAX_ENTRIES,
     GAZETTEER_SAVE_DELAY,
+    GAZETTEER_SEED_VERSION,
     GAZETTEER_STORAGE_KEY,
     GAZETTEER_STORAGE_VERSION,
 )
-from .gazetteer import Entry, Gazetteer
+from .gazetteer import Entry, Gazetteer, SaveSchedule
 from .places import Geocode
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,8 +56,15 @@ class GazetteerStore:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
+        # Live from the start: geocodes that arrive while the file is still
+        # being read are kept here and merged on top of it (`absorb`).
         self.gazetteer = Gazetteer(GAZETTEER_MAX_ENTRIES)
-        # Serialised in an executor: `_snapshot` hands it an immutable copy.
+        # Which seed the stored entries include, if any: GAZETTEER_SEED_VERSION
+        # once history has been read in. Written with the entries, so a seed
+        # that failed, found nothing or was cut short by a restart is retried.
+        self._seeded: int | None = None
+        self._schedule = SaveSchedule(GAZETTEER_SAVE_DELAY)
+        # Serialised in an executor: `_async_save` hands it an immutable copy.
         self._store: Store[dict[str, Any]] = Store(
             hass,
             GAZETTEER_STORAGE_VERSION,
@@ -80,59 +89,74 @@ class GazetteerStore:
             at=at.timestamp(),
         )
         if self.gazetteer.add(entry):
-            self._async_schedule_save()
+            self._async_save(self._schedule.changed(self.hass.loop.time()))
 
     @callback
-    def _async_schedule_save(self) -> None:
+    def _async_save(self, delay: float | None) -> None:
+        """Write within `delay` seconds; nothing for None (see `SaveSchedule`)."""
+        if delay is None:
+            return
         # The snapshot is taken here, in the loop, so the writer thread never
         # reads the live index while a geocode is being added to it. A tuple
-        # of twenty thousand references costs well under a millisecond, and a
-        # later add replaces it before the write happens.
-        snapshot = self.gazetteer.entries()
+        # of twenty thousand references costs well under a millisecond, and
+        # the next change replaces it before the write happens.
+        snapshot, seeded = self.gazetteer.entries(), self._seeded
         self._store.async_delay_save(
-            lambda: Gazetteer.entries_as_dict(snapshot), GAZETTEER_SAVE_DELAY
+            lambda: {**Gazetteer.entries_as_dict(snapshot), "seeded": seeded}, delay
         )
 
     async def async_start(self) -> None:
-        """Load what was stored, or seed from history when nothing was."""
+        """Load what was stored, seed from history if that hasn't been done, and
+        only then let anything be written."""
         try:
             stored = await self._store.async_load()
         except Exception:  # a corrupt store must not cost the integration
             _LOGGER.exception("Couldn't read the stored gazetteer; starting empty")
             stored = None
-        if stored:
-            loaded = await self.hass.async_add_executor_job(
-                Gazetteer.from_dict, stored, GAZETTEER_MAX_ENTRIES
-            )
-            if len(loaded):
-                self.gazetteer.absorb(loaded)
-                _LOGGER.debug("Loaded %d gazetteer entries", len(self.gazetteer))
-                return
-        await self._async_seed()
+        loaded = await self.hass.async_add_executor_job(
+            Gazetteer.from_dict, stored, GAZETTEER_MAX_ENTRIES
+        )
+        seeded = stored.get("seeded") if isinstance(stored, dict) else None
+        self._seeded = seeded if seeded == GAZETTEER_SEED_VERSION else None
+        changed = False
+        if self._seeded is None and (merged := await self._async_seed(loaded)):
+            loaded, self._seeded, changed = merged, GAZETTEER_SEED_VERSION, True
+        self.gazetteer.absorb(loaded)
+        _LOGGER.debug("Gazetteer ready with %d entries", len(self.gazetteer))
+        self._async_save(self._schedule.loaded(self.hass.loop.time(), changed=changed))
 
-    async def _async_seed(self) -> None:
-        """Fill an empty gazetteer from the recorder, once; carry on empty if not."""
+    async def _async_seed(self, loaded: Gazetteer) -> Gazetteer | None:
+        """`loaded` with the recorder's history added; None if there was none.
+
+        None as well when it fails, which is logged and retried on the next
+        start: seeding is a nicety, and the gazetteer fills itself anyway.
+        """
         entity_ids = self._geocoded_entity_ids()
         if not entity_ids or "recorder" not in self.hass.config.components:
-            return
+            return None
         try:
             instance = get_instance(self.hass)
             if not await instance.async_db_ready:
-                return
-            seeded = await instance.async_add_executor_job(
+                return None
+            entries = await instance.async_add_executor_job(
                 _seed, self.hass, entity_ids, dt_util.utcnow() - _SEED_SINCE
+            )
+            if not entries:
+                return None
+            merged = await self.hass.async_add_executor_job(
+                Gazetteer.from_entries,
+                [*loaded.entries(), *entries],
+                GAZETTEER_MAX_ENTRIES,
             )
         except Exception:  # seeding is a nicety
             _LOGGER.exception("Couldn't seed the gazetteer from history")
-            return
-        self.gazetteer.absorb(seeded)
+            return None
         _LOGGER.info(
             "Seeded the gazetteer with %d geocodes from %d sensors",
-            len(self.gazetteer),
+            len(entries),
             len(entity_ids),
         )
-        if len(self.gazetteer):
-            self._async_schedule_save()
+        return merged
 
     def _geocoded_entity_ids(self) -> list[str]:
         """Every phone's geocoded-location sensor: all of them are household phones.
@@ -154,9 +178,9 @@ class GazetteerStore:
         return sorted(found)
 
 
-def _seed(hass: HomeAssistant, entity_ids: list[str], since: datetime) -> Gazetteer:
-    """Every recorded geocode of these sensors, as a gazetteer. In the recorder's
-    executor: this is a database query and a few thousand rows of parsing.
+def _seed(hass: HomeAssistant, entity_ids: list[str], since: datetime) -> list[Entry]:
+    """Every recorded geocode of these sensors. In the recorder's executor:
+    this is a database query and a few thousand rows of parsing.
 
     Every row, not only the significant ones: a geocode sensor's state is the
     address line, and the attributes can change under one that doesn't.
@@ -173,7 +197,7 @@ def _seed(hass: HomeAssistant, entity_ids: list[str], since: datetime) -> Gazett
     rows: Iterable[State | dict[str, Any]] = (
         row for found in states.values() for row in found
     )
-    return Gazetteer.from_entries(_entries(rows), GAZETTEER_MAX_ENTRIES)
+    return list(_entries(rows))
 
 
 def _entries(rows: Iterable[State | dict[str, Any]]) -> Iterable[Entry]:

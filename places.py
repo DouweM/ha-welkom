@@ -379,48 +379,74 @@ def tighter(place: Place, *, than: Place | None) -> bool:
     return than is None or place.radius < than.radius
 
 
-# --- what the geocoder calls it, when the household doesn't ------------------
+# --- the geocode's own colonia and municipality ----------------------------------
 
-# The geocode's own names a tracker may fall back on, tightest first: the
-# colonia, then the alcaldía (in Mexico City, Apple's Locality is the borough).
-_FALLBACK_ATTRIBUTES = ("sub_locality", "locality")
+# What Apple puts in Administrative Area for Mexico City. Its alcaldías are
+# the Locality there ("Cuajimalpa"); Sub Administrative Area is just "Mexico
+# City" again.
+_CAPITAL = frozenset(
+    name.casefold()
+    for name in ("CDMX", "Ciudad de México", "Mexico City", "D.F.", "Distrito Federal")
+)
+
+# Mexico's other states as Apple abbreviates or spells them. Their
+# municipalities are the Sub Administrative Area ("Huixquilucan"), and the
+# Locality is a town within one.
+_STATES = frozenset(
+    name.casefold()
+    for name in (
+        "Ags.", "Aguascalientes",
+        "B.C.", "Baja California",
+        "B.C.S.", "Baja California Sur",
+        "Camp.", "Campeche",
+        "Chis.", "Chiapas",
+        "Chih.", "Chihuahua",
+        "Coah.", "Coahuila", "Coahuila de Zaragoza",
+        "Col.", "Colima",
+        "Dgo.", "Durango",
+        "Edo. Méx.", "Méx.", "Edomex", "Estado de México", "México",
+        "Gto.", "Guanajuato",
+        "Gro.", "Guerrero",
+        "Hgo.", "Hidalgo",
+        "Jal.", "Jalisco",
+        "Mich.", "Michoacán", "Michoacán de Ocampo",
+        "Mor.", "Morelos",
+        "Nay.", "Nayarit",
+        "N.L.", "Nuevo León",
+        "Oax.", "Oaxaca",
+        "Pue.", "Puebla",
+        "Qro.", "Querétaro",
+        "Q.R.", "Q. Roo", "Quintana Roo",
+        "S.L.P.", "San Luis Potosí",
+        "Sin.", "Sinaloa",
+        "Son.", "Sonora",
+        "Tab.", "Tabasco",
+        "Tamps.", "Tamaulipas",
+        "Tlax.", "Tlaxcala",
+        "Ver.", "Veracruz", "Veracruz de Ignacio de la Llave",
+        "Yuc.", "Yucatán",
+        "Zac.", "Zacatecas",
+    )
+)  # fmt: skip
 
 
-def geocoded_name(geocode: Geocode | None) -> Place | None:
-    """The neighbourhood or borough the geocode itself names, if it names one.
+def colonia(geocode: Geocode | None) -> str | None:
+    """The geocode's own neighbourhood: its Sub Locality, if it has one."""
+    return geocode.first("sub_locality") if geocode else None
 
-    Worth the radius of the attribute it came from, like a matcher on that
-    attribute would be, so it ranks against zones in the same units. Blank and
-    "N/A" values are absent, the way they are everywhere else here.
+
+def municipality(geocode: Geocode | None) -> str | None:
+    """The alcaldía or municipio the geocode is in, in Mexico; None elsewhere.
+
+    Apple files them at different levels on either side of the state line:
+    an alcaldía of Mexico City is the Locality, a municipio of a state is the
+    Sub Administrative Area. Outside Mexico there is no such word, and no
+    guess at one.
     """
-    if geocode is None:
+    if geocode is None or (state := geocode.first("administrative_area")) is None:
         return None
-    for attribute in _FALLBACK_ATTRIBUTES:
-        if (name := geocode.first(attribute)) is not None:
-            return Place(name=name, radius=GEOCODE_RADIUS[attribute])
+    if state.casefold() in _CAPITAL:
+        return geocode.first("locality")
+    if state.casefold() in _STATES:
+        return geocode.first("sub_administrative_area")
     return None
-
-
-def tracker_place(
-    *, named: Place | None, drawn: Place | None, geocode: Geocode | None
-) -> Place | None:
-    """What a tracker calls a fix: a household place, else the tighter of the
-    drawn shapes and the geocode's own colonia or alcaldía.
-
-    `named` is the tightest place with the geocode (zones, polygons and
-    matchers), `drawn` the same without it (zones and polygons only). A place
-    the household matched by geocode is the household's word for the spot and
-    always stands. Otherwise a real circle or polygon only stands when it is
-    at least as tight as the geocoder's own name -- a 48 m school beats the
-    colonia, the 15.6 km zone around the whole city never does. On 2026-10-17
-    at 21:17 UTC the phones were in Lomas de Vista Hermosa, which no household
-    place names, and read as "CDMX".
-    """
-    if named is not None and (drawn is None or named.name != drawn.name):
-        return named
-    fallback = geocoded_name(geocode)
-    if fallback is None:
-        return named
-    if drawn is not None and drawn.radius <= fallback.radius:
-        return drawn
-    return fallback

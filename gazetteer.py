@@ -230,3 +230,41 @@ def search_radius(accuracy: float, *, minimum: float, maximum: float) -> float:
     of the roads, nor wider than `maximum`, past which it is another place.
     """
     return min(max(minimum, accuracy), maximum)
+
+
+class SaveSchedule:
+    """When to write the gazetteer: never before the file is read, and never
+    later than `delay` after the first change that hasn't been written.
+
+    Before the load has finished, a write would replace the file with only
+    what arrived since startup -- and Home Assistant's `Store.async_load`
+    hands back a pending write instead of the file, so the load itself would
+    lose it. Changes are held until `loaded`. After that, every change asks
+    for the same deadline as the first unwritten one, so a stream of geocodes
+    can't push the write back for ever. `Store.async_delay_save` keeps the
+    latest data and fires at the deadline given.
+    """
+
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self._loaded = False
+        self._held = False
+        self._deadline: float | None = None
+
+    def changed(self, now: float) -> float | None:
+        """A change at `now`: the delay to save it in, or None to hold it."""
+        if not self._loaded:
+            self._held = True
+            return None
+        if self._deadline is None or now >= self._deadline:
+            # The last window's write has fired (or is firing); a new one.
+            self._deadline = now + self.delay
+        return self._deadline - now
+
+    def loaded(self, now: float, *, changed: bool) -> float | None:
+        """The load is done: the delay to save what was held in, if anything."""
+        self._loaded = True
+        if not (changed or self._held):
+            return None
+        self._held = False
+        return self.changed(now)

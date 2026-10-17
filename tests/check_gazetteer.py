@@ -395,4 +395,26 @@ check(
     300.0,
 )
 
+# --- when to write ---------------------------------------------------------------------
+# Never before the file is read: Store.async_load returns a pending write
+# instead of the file, so an early save would cost everything stored.
+sched = gaz.SaveSchedule(60.0)
+check("a change before the load is held", sched.changed(5.0), None)
+check("and another", sched.changed(8.0), None)
+check("the load releases what was held", sched.loaded(10.0, changed=False), 60.0)
+check("the next change keeps that deadline", sched.changed(40.0), 30.0)
+check("and the one after", sched.changed(69.0), 1.0)
+check("once it has passed, a new window", sched.changed(70.0), 60.0)
+check("which holds too", sched.changed(100.0), 30.0)
+quiet = gaz.SaveSchedule(60.0)
+check(
+    "a load with nothing to write writes nothing",
+    quiet.loaded(0.0, changed=False),
+    None,
+)
+check("its first change opens a window", quiet.changed(3.0), 60.0)
+seeded = gaz.SaveSchedule(60.0)
+check("a load that seeded writes", seeded.loaded(0.0, changed=True), 60.0)
+check("then holds the deadline", seeded.changed(59.0), 1.0)
+
 print("all gazetteer checks passed")
