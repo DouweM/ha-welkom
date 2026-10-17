@@ -246,3 +246,17 @@ def resolve_mapped_user_id(
 # positions are identical, and when the sensor is a poll behind they are a
 # street apart.
 GEOCODE_SLACK = 50.0
+
+# How long a new fix waits for its own geocode before it is named without one.
+# The two states usually land within the same second; named straight away, a
+# fix whose geocode is still the last one's read as the city ("CDMX") and then,
+# a moment later, as the neighbourhood -- every fix, all walk long.
+GEOCODE_WAIT = 5.0
+
+# How far a fix may wander from where the phone last geocoded a neighbourhood
+# and still be called by it, when the phone hasn't geocoded the fix itself.
+# iOS doesn't geocode every fix; between geocodes the only other name is the
+# zone drawn around the whole city, which is no news. Well inside a
+# sub-locality, so the old name outlasts a boundary by a block at most, and the
+# next geocode puts it right.
+AREA_LINGER = 300.0

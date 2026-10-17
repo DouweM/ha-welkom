@@ -297,4 +297,52 @@ check(
     True,
 )
 
+# --- between geocodes ----------------------------------------------------------
+# 2026-10-17 19:39-19:48: iOS geocoded Douwe in Bosque de Chapultepec II once,
+# then not again for nine minutes while he walked on, and every fix in between
+# read as "CDMX", the zone drawn around the whole city.
+Place = places.Place
+chapu_ii = places.GeocodedArea(
+    place=Place(name="Chapu II", radius=1000.0),
+    latitude=19.4170869732469,
+    longitude=-99.19947309958762,
+)
+cdmx = Place(name="CDMX", radius=20_000.0)
+linger = places.lingering_area
+check(
+    "176 m on, the neighbourhood outranks the city",
+    linger(
+        chapu_ii, latitude=19.417635, longitude=-99.197979, bare=cdmx, max_distance=300
+    ),
+    chapu_ii.place,
+)
+check(
+    "and outranks nothing at all",
+    linger(
+        chapu_ii, latitude=19.417635, longitude=-99.197979, bare=None, max_distance=300
+    ),
+    chapu_ii.place,
+)
+check(
+    "but not a tighter place the fix is in",
+    linger(
+        chapu_ii,
+        latitude=19.417635,
+        longitude=-99.197979,
+        bare=Place(name="Puente", radius=40.0),
+        max_distance=300,
+    ),
+    None,
+)
+check(
+    "nor once the walk has gone well past where it was said",
+    linger(chapu_ii, latitude=19.4205, longitude=-99.1994, bare=cdmx, max_distance=300),
+    None,
+)
+check(
+    "with nothing geocoded yet, the bare name stands",
+    linger(None, latitude=19.4176, longitude=-99.1979, bare=cdmx, max_distance=300),
+    None,
+)
+
 print("all place checks passed")

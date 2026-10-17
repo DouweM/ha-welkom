@@ -313,3 +313,36 @@ def recognise(
             if matcher_holds(matcher, geocode):
                 best, best_radius = Place(name=spec.name, radius=radius), radius
     return best
+
+
+@dataclass(frozen=True)
+class GeocodedArea:
+    """A place named by the phone's geocode, and where the phone was when it said so."""
+
+    place: Place
+    latitude: float
+    longitude: float
+
+
+def lingering_area(
+    area: GeocodedArea | None,
+    *,
+    latitude: float,
+    longitude: float,
+    bare: Place | None,
+    max_distance: float,
+) -> Place | None:
+    """The name a fix with no geocode of its own still goes by, if not `bare`.
+
+    `bare` is what the fix is called without a geocode: a real zone, a polygon,
+    or nothing. A neighbourhood the phone named a short walk ago is a better
+    answer than anything wider -- the city -- and a worse one than anything
+    tighter, which is news. None when `bare` should stand.
+    """
+    if area is None:
+        return None
+    if distance(latitude, longitude, area.latitude, area.longitude) > max_distance:
+        return None
+    if bare is not None and bare.radius <= area.place.radius:
+        return None
+    return area.place

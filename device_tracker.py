@@ -31,7 +31,10 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+)
 from homeassistant.helpers.restore_state import (
     ExtraStoredData,
     RestoredExtraData,
@@ -42,7 +45,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .client import WelkomClient
-from .const import DOMAIN, GEOCODE_SLACK, GPS_MAX_AGE, WELKOM_HOLD
+from .const import (
+    AREA_LINGER,
+    DOMAIN,
+    GEOCODE_SLACK,
+    GEOCODE_WAIT,
+    GPS_MAX_AGE,
+    WELKOM_HOLD,
+)
 from .coordinator import PersonData, WelkomConfigEntry, WelkomCoordinator, WelkomData
 from .location import (
     Circle,
@@ -54,7 +64,7 @@ from .location import (
     placement_lingers,
 )
 from .models import Home, Person
-from .places import Geocode
+from .places import Geocode, GeocodedArea, lingering_area
 from .roaming import Position, roaming_as_dict, roaming_from_dict
 
 
@@ -226,6 +236,11 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         # after welkom loses the person, see _async_update_attrs.
         self._held: tuple[PersonData, datetime] | None = None
         self._holding = False
+        # The last neighbourhood the phone's geocode named, for the fixes it
+        # doesn't geocode; and the fix whose geocode is being waited for.
+        self._area: GeocodedArea | None = None
+        self._geocode_waited: object = None
+        self._geocode_wait_cancel: Callable[[], None] | None = None
 
         self._attr_location_accuracy = 0
         self._async_update_attrs()
@@ -285,6 +300,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         self.async_on_remove(
             async_track_state_change_event(self.hass, watched, self._async_gps_changed)
         )
+        self.async_on_remove(self._cancel_geocode_wait)
         self._async_update_attrs()
 
     async def async_locate(self, **_: Any) -> None:
@@ -297,6 +313,43 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
     def _async_gps_changed(self, event: Event[EventStateChangedData]) -> None:
         self._async_update_attrs()
         self.async_write_ha_state()
+
+    def _geocode_is_stale(self, fix: Fix) -> bool:
+        """Whether the phone has a geocode, but of somewhere else than `fix`."""
+        if self._geocode_entity_id is None or self.hass is None:
+            return False
+        state = self.hass.states.get(self._geocode_entity_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return False
+        geocode = Geocode.from_attributes(state.attributes)
+        return not geocode.describes(
+            fix.latitude, fix.longitude, max(GEOCODE_SLACK, fix.accuracy)
+        )
+
+    def _await_geocode(self, fix: Fix) -> bool:
+        """Start waiting for this fix's geocode, once; False if not worth it."""
+        if self.hass is None or not self._geocode_is_stale(fix):
+            return False
+        key = fix.at or (fix.latitude, fix.longitude)
+        if key == self._geocode_waited:
+            return False
+        self._geocode_waited = key
+        self._cancel_geocode_wait()
+        self._geocode_wait_cancel = async_call_later(
+            self.hass, GEOCODE_WAIT, self._async_geocode_waited
+        )
+        return True
+
+    @callback
+    def _async_geocode_waited(self, _now: datetime) -> None:
+        self._geocode_wait_cancel = None
+        self._async_update_attrs()
+        self.async_write_ha_state()
+
+    def _cancel_geocode_wait(self) -> None:
+        if self._geocode_wait_cancel is not None:
+            self._geocode_wait_cancel()
+            self._geocode_wait_cancel = None
 
     @property
     def data(self) -> PersonData | None:
@@ -528,8 +581,40 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             was_home = not gps_in_charge or self._attr_state == STATE_HOME
             if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
                 self._attr_state = STATE_HOME
-            else:
+            elif geocode is not None:
                 place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
+                self._attr_state = place.name if place else STATE_NOT_HOME
+                self._cancel_geocode_wait()
+                # Remembered when the name came from the geocode, so the fixes
+                # iOS doesn't geocode can keep it (see `lingering_area`).
+                bare = self.coordinator.place_at(fix, None, coarse=math.inf)
+                if place and (bare is None or bare.name != place.name):
+                    self._area = GeocodedArea(
+                        place=place,
+                        latitude=geocode.latitude or fix.latitude,
+                        longitude=geocode.longitude or fix.longitude,
+                    )
+            elif (
+                gps_in_charge
+                and self._attr_state not in (None, STATE_HOME, STATE_NOT_HOME)
+                and self._await_geocode(fix)
+            ):
+                # Its geocode is usually a second behind: keep the name the
+                # last fix had until it lands, rather than calling every new
+                # fix "CDMX" for a moment (2026-10-17, a walk to Chapu II).
+                pass
+            else:
+                place = self.coordinator.place_at(fix, None, coarse=math.inf)
+                place = (
+                    lingering_area(
+                        self._area,
+                        latitude=fix.latitude,
+                        longitude=fix.longitude,
+                        bare=place,
+                        max_distance=AREA_LINGER,
+                    )
+                    or place
+                )
                 self._attr_state = place.name if place else STATE_NOT_HOME
             self._attr_latitude = fix.latitude
             self._attr_longitude = fix.longitude
