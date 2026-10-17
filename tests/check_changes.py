@@ -270,5 +270,40 @@ def check_fresh_urls() -> None:
     )
 
 
+def check_floor_expires() -> None:
+    """The floor outlives welkom's 30-second cache and no more: welkom reuses
+    any read that started after it, however old, so a floor kept forever would
+    let a worker nobody else wakes serve its last read indefinitely."""
+    clock = [1000.0]
+    real = client_module.monotonic
+    client_module.monotonic = lambda: clock[0]  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        client = client_module.WelkomClient(id="x", url="https://w")
+        with client.fresh_reads(after=5.0):
+            pass
+        clock[0] += client_module.FLOOR_TTL - 1
+        check(
+            "just inside the floor's lifetime, polls still ask for it",
+            client._presence_url("oasis", "people"),
+            "https://w/api/homes/oasis/people?fresh=true&after=5.0",
+        )
+        clock[0] += 2
+        check(
+            "past it, a poll is a plain poll again",
+            client._presence_url("oasis", "people"),
+            "https://w/api/homes/oasis/people",
+        )
+        with client.fresh_reads(after=4.0):
+            pass
+        check(
+            "and an older change can set a new floor once the old one lapsed",
+            client._presence_url("oasis", "people"),
+            "https://w/api/homes/oasis/people?fresh=true&after=4.0",
+        )
+    finally:
+        client_module.monotonic = real  # pyright: ignore[reportAttributeAccessIssue]
+
+
 check_fresh_urls()
+check_floor_expires()
 asyncio.run(main())

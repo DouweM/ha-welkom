@@ -6,6 +6,9 @@ from pathlib import Path
 import time
 from typing import Any
 
+import aiohttp
+import voluptuous as vol
+
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ID, CONF_URL, Platform
@@ -17,7 +20,7 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 
 from .auth import (
     DATA_AUTH_INJECTED,
@@ -108,18 +111,24 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
             if not isinstance(coordinator, WelkomCoordinator):
                 continue
             home = home_id or coordinator.home.id
-            if home not in await coordinator.client.homes:
+            try:
+                homes = await coordinator.client.homes
+            except (aiohttp.ClientError, TimeoutError) as e:
+                raise HomeAssistantError(f"Couldn't reach welkom: {e}") from e
+            if home not in homes:
                 continue
             try:
                 sighting = await coordinator.client.report_sighting(
                     home,
                     call.data["person"],
                     call.data["room"],
-                    float(at) if at is not None else time.time(),
-                    call.data.get("source", "door"),
+                    at if at is not None else time.time(),
+                    call.data["source"],
                 )
             except WelkomRefused as e:
                 raise HomeAssistantError(str(e)) from e
+            except (aiohttp.ClientError, TimeoutError) as e:
+                raise HomeAssistantError(f"Couldn't reach welkom: {e}") from e
             await coordinator.async_request_refresh()
             return {"sighting": sighting}
         raise HomeAssistantError(f"No welkom entry knows home {home_id!r}")
@@ -128,6 +137,18 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
         DOMAIN,
         "report_sighting",
         _handle_report_sighting,
+        schema=vol.Schema(
+            {
+                vol.Required("person"): cv.string,
+                vol.Required("room"): cv.string,
+                # A timestamp or anything a template renders as one.
+                vol.Optional("at"): vol.All(
+                    vol.Coerce(float), vol.Range(min=0, min_included=False)
+                ),
+                vol.Optional("home"): cv.string,
+                vol.Optional("source", default="door"): vol.In(["door"]),
+            }
+        ),
         supports_response=SupportsResponse.OPTIONAL,
     )
 

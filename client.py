@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
@@ -11,6 +12,11 @@ from .models import ConnectedPerson, Connection, Home, Person, Role, Uplink
 
 if TYPE_CHECKING:
     from .changes import Event
+
+
+FLOOR_TTL = 60.0
+"""Seconds a refresh's `after` keeps applying to later reads: twice welkom's
+30-second cache, so each worker has refilled it since."""
 
 
 class WelkomRefused(Exception):
@@ -36,12 +42,16 @@ class WelkomClient(BaseModel):
     # Every open fresh scope's `after`: scopes from different homes' streams
     # overlap and end in any order, so the newest is taken from all of them.
     _fresh_afters: list[float] = []
-    # The newest `after` a refresh has used. Every read after it asks for at
-    # least that recent too: welkom's 17 workers each cache their own, so a
-    # plain poll landing on one whose read predates a change would hand back
-    # the state from before it. 2026-10-17 18:32: Douwe home at :19, gone at
-    # :29 on a plain poll, home again at :50.
-    _floor: float | None = None
+    # The newest `after` a refresh has used, and when (monotonic). For a
+    # while after it, every read asks for at least that recent too: welkom's
+    # 17 workers each cache their own, so a plain poll landing on one whose
+    # read predates a change would hand back the state from before it.
+    # 2026-10-17 18:32: Douwe home at :19, gone at :29 on a plain poll, home
+    # again at :50. Only for a while, because welkom reuses any read that
+    # started after `after`, however old: past FLOOR_TTL every worker's own
+    # 30-second cache has been refilled since, and asking for it would only
+    # stop a worker that nobody else is waking from ever reading again.
+    _floor: tuple[float, float] | None = None
 
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
@@ -153,12 +163,20 @@ class WelkomClient(BaseModel):
             self._fresh -= 1
             if after is not None:
                 self._fresh_afters.remove(after)
-                if self._floor is None or after > self._floor:
-                    self._floor = after
+                floor = self._current_floor()
+                if floor is None or after >= floor:
+                    self._floor = (after, monotonic())
+
+    def _current_floor(self) -> float | None:
+        if self._floor is None:
+            return None
+        after, set_at = self._floor
+        return after if monotonic() - set_at < FLOOR_TTL else None
 
     def _presence_url(self, home_id: str, path: str) -> str:
         url = f"{self.home_url(home_id)}/{path}"
-        afters = [*self._fresh_afters, *([self._floor] if self._floor else [])]
+        floor = self._current_floor()
+        afters = [*self._fresh_afters, *([floor] if floor is not None else [])]
         if afters:
             # `fresh` too, for a welkom that doesn't know `after`.
             return f"{url}?fresh=true&after={max(afters)}"
