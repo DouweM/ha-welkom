@@ -445,6 +445,10 @@ def municipality(geocode: Geocode | None) -> str | None:
     """
     if geocode is None or (state := geocode.first("administrative_area")) is None:
         return None
+    # "Hidalgo" and "México" are names elsewhere too; the country decides
+    # when the geocode gives one.
+    if (country := geocode.first("iso_country_code")) and country.upper() != "MX":
+        return None
     if state.casefold() in _CAPITAL:
         return geocode.first("locality")
     if state.casefold() in _STATES:

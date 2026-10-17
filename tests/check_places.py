@@ -360,30 +360,61 @@ check(
     None,
 )
 
+
 # --- the geocode's own colonia and municipality --------------------------------------
 # 2026-10-17 21:17 UTC: both phones matched their own geocodes exactly, in a
 # colonia no household place names.
-VISTA_HERMOSA = Geocode.from_attributes(
-    {
-        "Sub Locality": "Lomas de Vista Hermosa",
-        "Locality": "Cuajimalpa",
-        "Sub Administrative Area": "Mexico City",
-        "Administrative Area": "CDMX",
-        "ISO Country Code": "MX",
-        "Areas Of Interest": "N/A",
-        "Location": [19.3946, -99.2563],
-    }
-)
-# Across the state line: Apple files the municipio a level up.
-JESUS_DEL_MONTE = Geocode.from_attributes(
-    {
-        "Sub Locality": "Jesús del Monte",
-        "Locality": "Huixquilucan de Degollado",
-        "Sub Administrative Area": "Huixquilucan",
-        "Administrative Area": "Edo. Méx.",
-        "ISO Country Code": "MX",
-    }
-)
+def row(sub_locality: str, locality: str, sub_admin: str, admin: str) -> Geocode:
+    """A geocode as HA's history recorded it on 2026-10-17."""
+    return Geocode.from_attributes(
+        {
+            "Sub Locality": sub_locality,
+            "Locality": locality,
+            "Sub Administrative Area": sub_admin,
+            "Administrative Area": admin,
+            "ISO Country Code": "MX",
+        }
+    )
+
+
+# (colonia, municipality) for each, as the household would say them: in CDMX
+# the alcaldía is the Locality; in Edo. Méx. the municipio is the Sub
+# Administrative Area and the Locality is a town.
+for label, geo, want in [
+    (
+        "21:13:55",
+        row("Bosques de las Lomas", "Cuajimalpa", "Mexico City", "CDMX"),
+        ("Bosques de las Lomas", "Cuajimalpa"),
+    ),
+    (
+        "21:17:21",
+        row("Lomas de Vista Hermosa", "Cuajimalpa", "Mexico City", "CDMX"),
+        ("Lomas de Vista Hermosa", "Cuajimalpa"),
+    ),
+    (
+        "21:21:39, Naucalpan the town",
+        row("El Olivo", "Naucalpan de Juárez", "Huixquilucan", "Edo. Méx."),
+        ("El Olivo", "Huixquilucan"),
+    ),
+    (
+        "21:23:15",
+        row("Hacienda de las Palmas", "Jesús del Monte", "Huixquilucan", "Edo. Méx."),
+        ("Hacienda de las Palmas", "Huixquilucan"),
+    ),
+    (
+        "21:27:17, N/A colonia",
+        row("N/A", "Jesús del Monte", "Huixquilucan", "Edo. Méx."),
+        (None, "Huixquilucan"),
+    ),
+    (
+        "18:46:26",
+        row("Lomas Virreyes", "Miguel Hidalgo", "Mexico City", "CDMX"),
+        ("Lomas Virreyes", "Miguel Hidalgo"),
+    ),
+]:
+    check(label, (places.colonia(geo), places.municipality(geo)), want)
+
+VISTA_HERMOSA = row("Lomas de Vista Hermosa", "Cuajimalpa", "Mexico City", "CDMX")
 NEW_YORK = Geocode.from_attributes(
     {
         "Sub Locality": "Midtown",
@@ -397,16 +428,6 @@ BLANK_COLONIA = Geocode.from_attributes(
     {"Sub Locality": "N/A", "Locality": " ", "Administrative Area": "CDMX"}
 )
 
-check("the colonia", places.colonia(VISTA_HERMOSA), "Lomas de Vista Hermosa")
-check("an alcaldía is the Locality", places.municipality(VISTA_HERMOSA), "Cuajimalpa")
-check(
-    "across the line, the colonia", places.colonia(JESUS_DEL_MONTE), "Jesús del Monte"
-)
-check(
-    "a municipio is the Sub Administrative Area",
-    places.municipality(JESUS_DEL_MONTE),
-    "Huixquilucan",
-)
 check(
     "a state spelled out counts",
     places.municipality(
@@ -430,6 +451,33 @@ check(
         )
     ),
     "Coyoacán",
+)
+for state in ("Hidalgo", "México"):
+    check(
+        f"a foreign {state!r} is no Mexican state",
+        places.municipality(
+            Geocode(
+                values={
+                    "administrative_area": (state,),
+                    "sub_administrative_area": ("Somewhere",),
+                    "iso_country_code": ("US",),
+                }
+            )
+        ),
+        None,
+    )
+check(
+    "a lower-case MX is Mexico",
+    places.municipality(
+        Geocode(
+            values={
+                "administrative_area": ("Hidalgo",),
+                "sub_administrative_area": ("Pachuca de Soto",),
+                "iso_country_code": ("mx",),
+            }
+        )
+    ),
+    "Pachuca de Soto",
 )
 check("abroad, a colonia still", places.colonia(NEW_YORK), "Midtown")
 check("but no municipality", places.municipality(NEW_YORK), None)
