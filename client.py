@@ -24,7 +24,9 @@ class WelkomClient(BaseModel):
     # While above zero, presence reads skip welkom's 30-second cache: set
     # around a refresh that a `changed` event triggered (see changes.py).
     _fresh: int = 0
-    _fresh_after: float | None = None
+    # Every open fresh scope's `after`: scopes from different homes' streams
+    # overlap and end in any order, so the newest is taken from all of them.
+    _fresh_afters: list[float] = []
 
     _connection: Connection | None = None
     _homes: dict[str, Home] | None = None
@@ -128,19 +130,20 @@ class WelkomClient(BaseModel):
         """Within this, presence reads skip welkom's 30-second cache; with
         `after`, they're from a read at least that recent (see changes.py)."""
         self._fresh += 1
-        previous = self._fresh_after
         if after is not None:
-            self._fresh_after = max(after, previous or after)
+            self._fresh_afters.append(after)
         try:
             yield
         finally:
             self._fresh -= 1
-            self._fresh_after = previous if self._fresh else None
+            if after is not None:
+                self._fresh_afters.remove(after)
 
     def _presence_url(self, home_id: str, path: str) -> str:
         url = f"{self.home_url(home_id)}/{path}"
-        if self._fresh_after is not None:
-            return f"{url}?after={self._fresh_after}"
+        if self._fresh_afters:
+            # `fresh` too, for a welkom that doesn't know `after`.
+            return f"{url}?fresh=true&after={max(self._fresh_afters)}"
         return f"{url}?fresh=true" if self._fresh else url
 
     async def changes(

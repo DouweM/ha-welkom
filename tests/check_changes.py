@@ -41,6 +41,9 @@ def _load(name: str):
 
 
 changes = _load("changes")
+_load("const")
+_load("models")
+client_module = _load("client")
 
 
 def check(label: str, got: object, want: object) -> None:
@@ -211,4 +214,42 @@ async def main() -> None:
     check("a refusal is warned about once, not every retry", len(warnings), 1)
 
 
+def check_fresh_urls() -> None:
+    """Overlapping refreshes (every home's stream sends `ready` at once) end in
+    any order; the newest `after` still open must be the one asked for."""
+    client = client_module.WelkomClient(id="x", url="https://w")
+    other = client_module.WelkomClient(id="y", url="https://w")
+
+    def url() -> str:
+        return client._presence_url("oasis", "people")
+
+    check("no refresh: the cache will do", url(), "https://w/api/homes/oasis/people")
+    a = client.fresh_reads(after=1.0)
+    b = client.fresh_reads(after=2.0)
+    c = client.fresh_reads(after=3.0)
+    a.__enter__()
+    b.__enter__()
+    a.__exit__(None, None, None)
+    c.__enter__()
+    check(
+        "with several open, the newest is asked for",
+        url(),
+        "https://w/api/homes/oasis/people?fresh=true&after=3.0",
+    )
+    b.__exit__(None, None, None)
+    check(
+        "the newest open after wins, whatever closed first",
+        url(),
+        "https://w/api/homes/oasis/people?fresh=true&after=3.0",
+    )
+    c.__exit__(None, None, None)
+    check(
+        "and nothing leaks into the next poll",
+        url(),
+        "https://w/api/homes/oasis/people",
+    )
+    check("clients don't share their scopes", other._fresh_afters, [])
+
+
+check_fresh_urls()
 asyncio.run(main())
