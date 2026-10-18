@@ -46,7 +46,7 @@ exercises the whole state machine without booting HA.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -308,6 +308,7 @@ class Trip:
         min_trip: timedelta,
         away_floor: float,
         still_speed: float,
+        home_places: Collection[str] = frozenset(),
     ) -> tuple[Stay, ...]:
         """Everywhere this trip amounts to, in the order it happened.
 
@@ -358,6 +359,14 @@ class Trip:
         fix hands the phone control for a couple of seconds — twice in the week
         to 2026-09-12, both while Douwe was in fact in the garden — and a trip
         whose whole life is shorter than this has no story to tell.
+
+        `home_places` are the places the house itself is in, which `follow`
+        already declines to name anything by. Asked again here for the trips
+        that learned the name before anybody knew it was home's: one carried
+        across the upgrade, or followed for the moments after a restart
+        before the house's own geocode was to hand. A stay there is still a
+        stay, just an unnamed one, and the floor decides it like any other;
+        a visit or a turn there is only the name, and goes.
         """
         if self.seen_at - self.left_at < min_trip:
             return ()
@@ -374,10 +383,16 @@ class Trip:
                 until=visit.until,
             )
             for visit in self.visits
-            if visit.duration >= dwell and visit.speed <= still_speed
+            if visit.duration >= dwell
+            and visit.speed <= still_speed
+            and visit.place not in home_places
         )
-        if turn := self.turn:
+        if (turn := self.turn) and turn.place not in home_places:
             found.append(turn)
+        found = [
+            replace(stay, place=None) if stay.place in home_places else stay
+            for stay in found
+        ]
 
         found.sort(key=lambda stay: stay.since)
 
@@ -414,6 +429,7 @@ def follow(
     away_floor: float,
     still_speed: float,
     turn_slack: float,
+    home_places: Collection[str] = frozenset(),
 ) -> Trip | None:
     """Fold one observation into the trip, returning the trip as it now stands.
 
@@ -435,7 +451,23 @@ def follow(
     the same spot: wide enough to swallow a phone's own noise and a building,
     narrow enough that the next block is somewhere else. It is widened by the
     fix's own claimed accuracy, so a vague reading never invents a move.
+
+    `home_places` are the places the house itself is in, and a fix in one of
+    them is followed as open ground: nobody goes out to visit their own
+    neighbourhood. On 2026-10-18 Douwe and Gaby drove home from Jesús del
+    Monte, crossed Lomas -- the colonia the house is in -- for the last five
+    minutes, and the door card said they were "arriving from Lomas and Jesús
+    del Monte". Every trip from the house starts and ends in that colonia, so
+    naming anything after it says nothing, and the ways it can sneak onto the
+    list are too many to close one by one: a crawl through it slow enough to
+    read as a visit, the wait at the gate settling as a stay, a short errand
+    whose furthest point is still inside it. Places INSIDE it are another
+    matter -- the Puente, 160 m down the road, is a zone of its own, tighter,
+    and so what such a fix is called in the first place.
     """
+    if place is not None and place.name in home_places:
+        place = None
+
     if fix is None:
         # Nothing new was said. Time still passes, and time is what turns an
         # anchor into a stay.
@@ -513,7 +545,7 @@ def follow(
         seen_latitude=fix.latitude,
         seen_longitude=fix.longitude,
         place=name,
-        visits=_visited(trip.visits, name, fix, now),
+        visits=_visited(trip.visits, name, was, fix, now, dwell),
         ventured=trip.ventured or from_home >= away_floor,
         furthest=max(trip.furthest, from_home),
     )
@@ -644,20 +676,39 @@ def _turn(
 
 
 def _visited(
-    visits: tuple[Visit, ...], place: str | None, fix: Fix, now: datetime
+    visits: tuple[Visit, ...],
+    place: str | None,
+    was: str | None,
+    fix: Fix,
+    now: datetime,
+    dwell: timedelta,
 ) -> tuple[Visit, ...]:
     """Extend the open visit, or open a new one when the place changes.
 
     Leaving a zone for open ground closes the visit without opening another:
     the gaps between named places are the road, and the road has no name worth
-    keeping.
+    keeping. `was` is the place of the fix before this one, which is how a
+    visit knows it was left.
+
+    Closed for good only once they have been out of it for `dwell`, though. A
+    neighbourhood is named by the phone's geocode, and a fix whose geocode is
+    still on its way is open ground for a moment in the middle of the park;
+    that is not leaving. But ten hours is, and for a while it was not: the
+    Lomas crossed on the way OUT at 21:01 on 2026-10-17 was reopened by the
+    Lomas crossed on the way home at 07:19 the next morning, and one visit
+    that began and ended on the same street, ten hours long, read as the
+    slowest walk there ever was -- and as the first place of the trip.
 
     The fix travels with the visit so that `Visit.speed` can be asked later
     whether this was being somewhere or driving through it.
     """
     if place is None:
         return visits
-    if visits and visits[-1].place == place:
+    if (
+        visits
+        and visits[-1].place == place
+        and (was == place or now - visits[-1].until <= dwell)
+    ):
         return (
             *visits[:-1],
             replace(

@@ -43,6 +43,7 @@ from .const import (
     TRIP_TURN_SLACK,
     gps_tracker_entity_id,
 )
+from .gazetteer_store import async_get_gazetteer
 from .location import Circle, Fix, distance
 from .models import (
     Activity,
@@ -55,7 +56,7 @@ from .models import (
     Role,
     Room,
 )
-from .places import Geocode, PlaceSpec, places_from_config, recognise
+from .places import Geocode, PlaceSpec, containing, places_from_config, recognise
 from .roaming import (
     Position,
     Roaming,
@@ -801,6 +802,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                     min_trip=TRIP_MIN,
                     away_floor=TRIP_AWAY_FLOOR,
                     still_speed=TRIP_STILL_SPEED,
+                    home_places=self.home_places(home),
                 ):
                     self._ended[person_id] = (over, now)
                 self._seen.pop(person_id, None)
@@ -863,6 +865,8 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             away_floor=TRIP_AWAY_FLOOR,
             still_speed=TRIP_STILL_SPEED,
             turn_slack=TRIP_TURN_SLACK,
+            # Of the home the trip is measured from, which `follow` decides.
+            home_places=self.home_places((before.home if before else None) or home),
         )
         if after is not None:
             self._trips[person_id] = after
@@ -927,6 +931,60 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             latitude=latitude,
             longitude=longitude,
             radius=zone_attrs.get("radius") or 0,
+        )
+
+    def home_places(self, home: Circle) -> frozenset[str]:
+        """The places the house itself is in, which no trip from it visits.
+
+        Asked of the house the way a fix is asked, so the answer is whatever
+        the household's own rules make of it, with no new setting to keep in
+        step: a zone whose circle holds the house's centre, a polygon around
+        it, or a place the geocode said AT the house matches. Lomas is the
+        last kind -- a list of colonias and nothing else -- so its geometry is
+        Apple's, and only a geocode can tell whether a point is in it.
+
+        That geocode is the gazetteer's: whatever a phone's geocoder said
+        nearest the centre, inside the home zone itself. Not further, because
+        the further it reaches the likelier the nearest geocode is across a
+        boundary -- the park is a road's width from the gate -- and a park
+        mistaken for home would stop counting as anywhere to go. The marker
+        circles are no help either: they are a picture, put wherever the icon
+        looks right, and whether one happens to touch `zone.home` says
+        nothing about whether the house is in the place.
+
+        Empty until the gazetteer has loaded, or if nobody has ever been
+        geocoded at the house; `Trip.been_to` asks again later for exactly
+        that reason.
+        """
+        zones: set[str] = set()
+        for zone_entity_id in self.hass.data.get(DATA_ZONE_ENTITY_IDS, ()):
+            if zone_entity_id == ENTITY_ID_HOME:
+                continue
+            zone = self.hass.states.get(zone_entity_id)
+            if not zone or zone.state == STATE_UNAVAILABLE:
+                continue
+            zone_attrs = cast(dict[str, Any], zone.attributes)
+            if zone_attrs.get("passive"):
+                continue
+            latitude = zone_attrs.get(ATTR_LATITUDE)
+            longitude = zone_attrs.get(ATTR_LONGITUDE)
+            radius = zone_attrs.get("radius")
+            if latitude is None or longitude is None or not radius:
+                continue
+            if distance(home.latitude, home.longitude, latitude, longitude) <= radius:
+                zones.add(zone.name)
+
+        gazetteer = async_get_gazetteer(self.hass)
+        geocode = (
+            gazetteer.nearest(home.latitude, home.longitude, home.radius)
+            if gazetteer is not None
+            else None
+        )
+        return frozenset(zones) | containing(
+            self.places,
+            latitude=home.latitude,
+            longitude=home.longitude,
+            geocode=geocode,
         )
 
     @property

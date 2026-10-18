@@ -472,7 +472,7 @@ class WelkomCurrentDeviceSensor(CoordinatorEntity[WelkomCoordinator], SensorEnti
         self.async_write_ha_state()
 
 
-def _itinerary(trip: Trip, home: Circle) -> dict[str, Any]:
+def _itinerary(trip: Trip, home: Circle, home_places: frozenset[str]) -> dict[str, Any]:
     """`places` and `been_to`, the same way whether the trip is live or over."""
     been_to = trip.been_to(
         home,
@@ -480,6 +480,7 @@ def _itinerary(trip: Trip, home: Circle) -> dict[str, Any]:
         min_trip=TRIP_MIN,
         away_floor=TRIP_AWAY_FLOOR,
         still_speed=TRIP_STILL_SPEED,
+        home_places=home_places,
     )
     return {
         "places": [stay.place for stay in been_to],
@@ -617,7 +618,9 @@ class WelkomTripSensor(
                     # journey's shape, and the card written as they walk back
                     # in has to know which kind of trip it is summarising.
                     "furthest": round(over.furthest),
-                    **_itinerary(over, left_from),
+                    **_itinerary(
+                        over, left_from, self.coordinator.home_places(left_from)
+                    ),
                 }
             return
 
@@ -638,7 +641,7 @@ class WelkomTripSensor(
             # current any more.
             "stale": stale(trip, now, TRIP_MAX_AGE),
             "seen_at": trip.seen_at,
-            **_itinerary(trip, home),
+            **_itinerary(trip, home, self.coordinator.home_places(home)),
         }
 
     @callback

@@ -335,6 +335,35 @@ def recognise(
     return best
 
 
+def containing(
+    specs: Iterable[PlaceSpec],
+    *,
+    latitude: float,
+    longitude: float,
+    geocode: Geocode | None,
+) -> frozenset[str]:
+    """Every configured place that holds for this position, however wide.
+
+    `recognise` wants the tightest, to name a fix by. This wants all of them,
+    to ask what the HOUSE is in: nobody goes out to visit their own
+    neighbourhood, and a trip that crosses it on the way home has not been
+    there (see `trip.follow`'s `home_places`). Exactly the places whose own
+    test the house passes, and not everything near it: the Puente and the park
+    across the road are still somewhere to go.
+    """
+    found: set[str] = set()
+    for spec in specs:
+        if (spec.polygon and point_in_polygon(latitude, longitude, spec.polygon)) or (
+            geocode is not None
+            and any(
+                matcher_radius(matcher) is not None and matcher_holds(matcher, geocode)
+                for matcher in spec.geocodes_as
+            )
+        ):
+            found.add(spec.name)
+    return frozenset(found)
+
+
 @dataclass(frozen=True)
 class GeocodedArea:
     """A place named by the phone's geocode, and where the phone was when it said so."""

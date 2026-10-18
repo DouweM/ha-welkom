@@ -68,7 +68,14 @@ def check(label: str, got: object, want: object) -> None:
         sys.exit(1)
 
 
-def step(trip, fix, at: float, place: str | None = None, radius: float = 100.0):
+def step(
+    trip,
+    fix,
+    at: float,
+    place: str | None = None,
+    radius: float = 100.0,
+    home_places: frozenset[str] = frozenset(),
+):
     """`place` is given as a bare name here; the module wants its size too, and
     only the replays at the bottom care what that size is."""
     return follow(
@@ -83,10 +90,11 @@ def step(trip, fix, at: float, place: str | None = None, radius: float = 100.0):
         away_floor=AWAY_FLOOR,
         still_speed=STILL_SPEED,
         turn_slack=TURN_SLACK,
+        home_places=home_places,
     )
 
 
-def been(trip) -> tuple[str | None, ...]:
+def been(trip, home_places: frozenset[str] = frozenset()) -> tuple[str | None, ...]:
     """The trip's itinerary by name, for readable expectations."""
     return tuple(
         stay.place
@@ -96,6 +104,7 @@ def been(trip) -> tuple[str | None, ...]:
             min_trip=MIN_TRIP,
             away_floor=AWAY_FLOOR,
             still_speed=STILL_SPEED,
+            home_places=home_places,
         )
     )
 
@@ -266,23 +275,37 @@ def place_of(latitude: float, longitude: float, accuracy: float):
     return best
 
 
-def replay(fixes) -> Any:
+def replay(
+    fixes, *, lomas: bool = False, home_places: frozenset[str] = frozenset()
+) -> Any:
     """Run a recorded journey through the follower, ticking every 30s like the
-    coordinator does. Returns the trip as it stood when they got home."""
+    coordinator does. Returns the trip as it stood when they got home.
+
+    `lomas` names every fix within a kilometre of the house that no zone
+    claims "Lomas", the way the geocode does now that the Lomas circles are
+    gone and the colonia is a household place matched by sub-locality."""
     trip = None
     clock = 0.0
     for offset, latitude, longitude, accuracy in fixes:
         while clock + 30 <= offset:
             clock += 30
-            trip = step(trip, None, clock)
+            trip = step(trip, None, clock, home_places=home_places)
         clock = offset
         found = place_of(latitude, longitude, accuracy)
+        if (
+            found is None
+            and lomas
+            and location.distance(latitude, longitude, HOME.latitude, HOME.longitude)
+            < 1000
+        ):
+            found = trip_mod.Place(name="Lomas", radius=1000.0)
         trip = step(
             trip,
             Fix(latitude=latitude, longitude=longitude, accuracy=accuracy),
             offset,
             found.name if found else None,
             found.radius if found else 100.0,
+            home_places,
         )
     assert trip is not None
     return trip
@@ -581,5 +604,125 @@ check(
     trip_mod.trip_from_dict(older).home,
     None,
 )
+
+# --- the neighbourhood the house is in is not somewhere they went -------------
+# Douwe, 2026-10-17 21:01 to 2026-10-18 07:25: out through Lomas, ten hours at
+# a friend's in Jesús del Monte -- open ground, 10 km out -- and home through
+# Lomas again, slowly, for the last five minutes. The door card said "arriving
+# from Lomas and Jesús del Monte": Lomas first, though it came last, and at all,
+# though the house is in it. The shape of it, at the house's own coordinates.
+HOME_PLACES = frozenset({"Lomas"})
+LOMAS = 1000.0
+
+
+def night_out(home_places: frozenset[str] = frozenset()):
+    trip = None
+    for t, fix, place in [
+        # Out: two fixes in Lomas, then open road.
+        (0, at(300), "Lomas"),
+        (60, at(800), "Lomas"),
+        (300, at(4000, 3000), None),
+        # The friend's house, all night.
+        (900, at(9000, 6000), None),
+        (1200, None, None),
+        (18000, at(9000, 6010), None),
+        # Home: back into Lomas at walking pace in traffic, six minutes of it.
+        (36000, at(3000, 1000), None),
+        (36060, at(900), "Lomas"),
+        (36180, at(800), "Lomas"),
+        (36300, at(700), "Lomas"),
+        (36420, at(650), "Lomas"),
+    ]:
+        trip = step(
+            trip, fix, t, place, LOMAS if place else 100.0, home_places=home_places
+        )
+    return trip
+
+
+naive = night_out()
+check(
+    "a zone crossed on the way out and again ten hours later is two visits",
+    [visit.since for visit in naive.visits],
+    [T0, T0 + timedelta(seconds=36060)],
+)
+check(
+    "...so, with nothing said about home, Lomas comes after the night out",
+    been(naive),
+    (None, "Lomas"),
+)
+check(
+    "the night out, knowing the house is in Lomas, was the night out",
+    been(night_out(HOME_PLACES), HOME_PLACES),
+    (None,),
+)
+# Each of the two ways in on its own, so neither hides behind the other.
+check(
+    "...because follow never names a fix by the house's own colonia",
+    been(night_out(HOME_PLACES)),
+    (None,),
+)
+check(
+    "...and been_to drops it from a trip that learned it before anybody knew",
+    been(naive, HOME_PLACES),
+    (None,),
+)
+
+# Nor the turn: an errand whose far end is still in Lomas.
+errand = step(None, at(300), 0, "Lomas", LOMAS)
+errand = step(errand, at(700), 60, "Lomas", LOMAS)
+errand = step(errand, at(300), 180)
+check("an errand inside Lomas used to turn at Lomas", been(errand), ("Lomas",))
+check("...which been_to drops after the fact", been(errand, HOME_PLACES), ())
+errand = step(None, at(300), 0, "Lomas", LOMAS, HOME_PLACES)
+errand = step(errand, at(700), 60, "Lomas", LOMAS, HOME_PLACES)
+errand = step(errand, at(300), 180, home_places=HOME_PLACES)
+check("...and now has no turn to name", errand.turn_place, None)
+
+# A wait at the gate in Lomas: settled, and named, until Lomas is home's.
+gate = step(None, at(120), 0, "Lomas", LOMAS)
+gate = step(gate, at(600, 400), 60, "Lomas", LOMAS)
+gate = step(gate, at(130), 200, "Lomas", LOMAS)
+gate = step(gate, None, 600)
+check("a wait at the gate in Lomas used to be a stay in Lomas", been(gate), ("Lomas",))
+check("...and been_to unnames it after the fact", been(gate, HOME_PLACES), ())
+quiet_gate = step(None, at(120), 0, "Lomas", LOMAS, HOME_PLACES)
+quiet_gate = step(quiet_gate, at(600, 400), 60, "Lomas", LOMAS, HOME_PLACES)
+quiet_gate = step(quiet_gate, at(130), 200, "Lomas", LOMAS, HOME_PLACES)
+quiet_gate = step(quiet_gate, None, 600, home_places=HOME_PLACES)
+check("...and is now the doorstep", been(quiet_gate, HOME_PLACES), ())
+check("...which is not a destination", quiet_gate.arrived(HOME, AWAY_FLOOR), False)
+
+# A neighbourhood that is not home's still counts, by stay or by turn.
+polanco = step(None, at(300), 0, "Lomas", LOMAS, HOME_PLACES)
+polanco = step(polanco, at(-3000, 3000), 300, "Polanco", LOMAS, HOME_PLACES)
+polanco = step(polanco, None, 900, home_places=HOME_PLACES)
+polanco = step(polanco, at(800), 3000, "Lomas", LOMAS, HOME_PLACES)
+polanco = step(polanco, at(400), 3060, "Lomas", LOMAS, HOME_PLACES)
+check(
+    "an afternoon in Polanco is still Polanco", been(polanco, HOME_PLACES), ("Polanco",)
+)
+
+# And places INSIDE the house's colonia are still places: the Puente is a zone
+# of its own, tighter than Lomas, so that is what the fixes there are called.
+puente_home = replay(EVENING_AT_THE_PUENTE, lomas=True, home_places=HOME_PLACES)
+check(
+    "the evening at the bridge is the bridge, in Lomas or not",
+    been(puente_home, HOME_PLACES),
+    ("Puente",),
+)
+chapu_home = replay(WALK_TO_CHAPU, lomas=True, home_places=HOME_PLACES)
+check(
+    "...and the park walk still went to the park, by way of the bridge",
+    been(chapu_home, HOME_PLACES),
+    ("Puente", "Chapu II"),
+)
+
+# Out of a zone for a moment is not leaving it: a neighbourhood is a geocode,
+# and a fix whose geocode has not landed yet is open ground mid-park.
+blink = step(None, at(-3000, 3000), 0, "Polanco", LOMAS)
+blink = step(blink, at(-3000, 3100), 60, "Polanco", LOMAS)
+blink = step(blink, at(-3000, 3200), 120)
+blink = step(blink, at(-3000, 3300), 180, "Polanco", LOMAS)
+check("a fix's worth of open ground does not split a visit", len(blink.visits), 1)
 
 print("all trip checks passed")

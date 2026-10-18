@@ -528,4 +528,48 @@ check(
     False,
 )
 
+# --- what the house is in ----------------------------------------------------------
+# Every place the house's own geocode matches, not just the tightest -- a trip
+# from home never visits any of them. The geocode is Apple's, at the front door.
+HOUSE = (19.41933, -99.205755)
+check(
+    "the house is in Lomas",
+    places.containing(SPECS, latitude=HOUSE[0], longitude=HOUSE[1], geocode=AT_HOME),
+    frozenset({"Lomas"}),
+)
+check(
+    "...and not in the park across the road",
+    "Chapu III"
+    in places.containing(SPECS, latitude=HOUSE[0], longitude=HOUSE[1], geocode=AT_HOME),
+    False,
+)
+check(
+    "with no geocode, only a polygon can say",
+    places.containing(SPECS, latitude=HOUSE[0], longitude=HOUSE[1], geocode=None),
+    frozenset(),
+)
+check(
+    "a polygon around the point holds by itself",
+    places.containing(SPECS, latitude=19.4228, longitude=-99.2050, geocode=None),
+    frozenset({"Molino"}),
+)
+check(
+    "and every place that holds is in, the wide with the tight",
+    places.containing(
+        places_from_config(
+            [
+                *CONFIG,
+                {
+                    "name": "Miguel Hidalgo",
+                    "geocodes_as": {"locality": "Miguel Hidalgo"},
+                },
+            ]
+        ),
+        latitude=HOUSE[0],
+        longitude=HOUSE[1],
+        geocode=AT_HOME,
+    ),
+    frozenset({"Lomas", "Miguel Hidalgo"}),
+)
+
 print("all place checks passed")
