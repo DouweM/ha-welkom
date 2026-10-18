@@ -650,6 +650,13 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
                 self._attr_state = STATE_HOME
                 self._area = None
+                if geocode is not None and gazetteer is not None:
+                    # Still written down, though nothing here is named by it:
+                    # it is what the HOUSE is in, which `home_places` asks the
+                    # gazetteer, and the seed's copy would otherwise age out.
+                    # One 25 m cell, replaced in place by each newer geocode.
+                    latitude, longitude = self._geocode_position(fix, geocode)
+                    gazetteer.add(latitude, longitude, geocode, fix.at or now)
             elif geocode is not None:
                 place = self.coordinator.place_at(fix, geocode, coarse=math.inf)
                 self._attr_state = place.name if place else STATE_NOT_HOME
