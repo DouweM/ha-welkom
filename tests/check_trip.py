@@ -791,4 +791,12 @@ blinks = step(blinks, at(-3000, 3300), 1000)
 blinks = step(blinks, at(-3000, 3400), 1100, "Polanco", LOMAS)
 check("two brief blinks out of a visit leave it one visit", len(blinks.visits), 1)
 
+# A trip restored from before home's places were known is not "settled" at
+# the gate on the strength of the name alone.
+check(
+    "a wait at the gate, named Lomas before Lomas was home's, has not arrived",
+    (gate.arrived(HOME, AWAY_FLOOR), gate.arrived(HOME, AWAY_FLOOR, HOME_PLACES)),
+    (True, False),
+)
+
 print("all trip checks passed")

@@ -294,16 +294,23 @@ class Trip:
         """How far the anchor is from home, in meters."""
         return distance(self.latitude, self.longitude, home.latitude, home.longitude)
 
-    def arrived(self, home: Circle, away_floor: float) -> bool:
+    def arrived(
+        self,
+        home: Circle,
+        away_floor: float,
+        home_places: Collection[str] = frozenset(),
+    ) -> bool:
         """Whether the anchor is somewhere worth calling a destination.
 
         Settled, and then either named or far enough out — different questions,
         and a place only has to answer one. Sitting on an unnamed bench 160 m
-        down the road answers neither.
+        down the road answers neither. A name the house is in is no name at
+        all (see `follow`); passed for a trip that learned it first.
         """
         if not self.settled:
             return False
-        return self.place is not None or self.distance_from(home) >= away_floor
+        named = self.place is not None and self.place not in home_places
+        return named or self.distance_from(home) >= away_floor
 
     def been_to(
         self,

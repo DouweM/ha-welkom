@@ -625,23 +625,26 @@ class WelkomTripSensor(
             return
 
         now = dt_util.utcnow()
-        arrived = trip.arrived(home, TRIP_AWAY_FLOOR)
+        # A trip restored from before home's places were known can still
+        # carry one; the waypoint must not say "via Lomas" from it.
+        home_places = self.coordinator.home_places(home)
+        arrived = trip.arrived(home, TRIP_AWAY_FLOOR, home_places)
         self._attr_native_value = "settled" if arrived else "travelling"
 
         self._attr_extra_state_attributes = {
             "left_at": trip.left_at,
             "settled_at": trip.settled_at if arrived else None,
-            "place": trip.place,
+            "place": trip.place if trip.place not in home_places else None,
             "latitude": trip.latitude,
             "longitude": trip.longitude,
             "distance": round(trip.distance_from(home)),
             "furthest": round(trip.furthest),
-            "turn": trip.turn_place,
+            "turn": trip.turn_place if trip.turn_place not in home_places else None,
             # Whether the phone has been quiet long enough that none of this is
             # current any more.
             "stale": stale(trip, now, TRIP_MAX_AGE),
             "seen_at": trip.seen_at,
-            **_itinerary(trip, home, self.coordinator.home_places(home)),
+            **_itinerary(trip, home, home_places),
         }
 
     @callback
