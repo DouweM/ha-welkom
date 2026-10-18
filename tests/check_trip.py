@@ -725,4 +725,70 @@ blink = step(blink, at(-3000, 3200), 120)
 blink = step(blink, at(-3000, 3300), 180, "Polanco", LOMAS)
 check("a fix's worth of open ground does not split a visit", len(blink.visits), 1)
 
+# Douwe, 2026-10-17 19:18-19:57, in Chapu II -- a geocoded place, so named
+# only when the phone's geocode has landed. Real fixes, seconds from 19:18:25.
+# His phone went quiet for sixteen minutes, and its first fix back had no
+# geocode yet. Silence is not leaving, and neither is one fix outside.
+CHAPU_II_EVENING = [
+    (0, 19.419117717056032, -99.20327264754249, 47.3, "Chapu II"),
+    (36, 19.419247740296314, -99.20264605594339, 51.2, "Chapu II"),
+    (63, 19.419359861008505, -99.20240146649263, 34.6, "Chapu II"),
+    (90, 19.419380292175898, -99.20238617153784, 35.1, "Chapu II"),
+    (118, 19.419260115635577, -99.20293349240602, 32.5, "Chapu II"),
+    (144, 19.419301682607102, -99.20250316785913, 45.8, "Chapu II"),
+    (171, 19.419316379818248, -99.2024240495767, 44.4, "Chapu II"),
+    (199, 19.41948069784662, -99.20237856167627, 29.3, "Chapu II"),
+    (226, 19.419404458200372, -99.20210590239626, 25.7, "Chapu II"),
+    (314, 19.41940678224741, -99.20182771016482, 26.6, "Chapu II"),
+    (1271, 19.4170869732469, -99.19947309958762, 76.9, None),
+    (1272, 19.4170869732469, -99.19947309958762, 76.9, "Chapu II"),
+    # Then thirteen minutes somewhere the geocoder did not call the park, seen
+    # by three fixes, and back: that IS leaving, and coming back.
+    (1546, 19.417635261044587, -99.19797885920582, 15.3, None),
+    (1577, 19.417501348667976, -99.19785452887086, 9.4, None),
+    (1824, 19.417501348667976, -99.19785452887086, 9.4, None),
+    (2325, 19.41680056486383, -99.19977134917674, 16.1, "Chapu II"),
+]
+
+
+def park_evening(fixes):
+    trip = None
+    for t, latitude, longitude, accuracy, name in fixes:
+        trip = step(
+            trip,
+            Fix(latitude=latitude, longitude=longitude, accuracy=accuracy),
+            t,
+            name,
+            LOMAS if name else 100.0,
+        )
+    return trip
+
+
+quiet_park = park_evening(CHAPU_II_EVENING[:12])
+check(
+    "sixteen quiet minutes and a fix without its geocode are one visit",
+    [(v.place, (v.until - v.since).total_seconds()) for v in quiet_park.visits],
+    [("Chapu II", 1272.0)],
+)
+check(
+    "...and thirteen minutes SEEN outside it is a second",
+    [v.since - T0 for v in park_evening(CHAPU_II_EVENING).visits],
+    [timedelta(0), timedelta(seconds=2325)],
+)
+check(
+    "the visit's watch on leaving survives a restart",
+    (left := park_evening(CHAPU_II_EVENING[:11])) is not None
+    and trip_mod.trip_from_dict(trip_mod.trip_as_dict(left)) == left
+    and left.visits[-1].outside_since is not None,
+    True,
+)
+
+# Coming back in clears the watch: two blinks far apart are not one long one.
+blinks = step(None, at(-3000, 3000), 0, "Polanco", LOMAS)
+blinks = step(blinks, at(-3000, 3100), 60)
+blinks = step(blinks, at(-3000, 3200), 120, "Polanco", LOMAS)
+blinks = step(blinks, at(-3000, 3300), 1000)
+blinks = step(blinks, at(-3000, 3400), 1100, "Polanco", LOMAS)
+check("two brief blinks out of a visit leave it one visit", len(blinks.visits), 1)
+
 print("all trip checks passed")

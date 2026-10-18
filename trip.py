@@ -88,6 +88,11 @@ class Visit:
     """And where it had got to, so `speed` can tell being somewhere from
     driving through it."""
 
+    outside_since: datetime | None = None
+    """The first fix seen OUTSIDE it since the last one inside, or None while
+    nothing has said they left. A fix, not the clock: a phone gone quiet in
+    the park has not left the park."""
+
     @property
     def duration(self) -> timedelta:
         """How long they were in it."""
@@ -545,7 +550,7 @@ def follow(
         seen_latitude=fix.latitude,
         seen_longitude=fix.longitude,
         place=name,
-        visits=_visited(trip.visits, name, was, fix, now, dwell),
+        visits=_visited(trip.visits, name, fix, now, dwell),
         ventured=trip.ventured or from_home >= away_floor,
         furthest=max(trip.furthest, from_home),
     )
@@ -678,7 +683,6 @@ def _turn(
 def _visited(
     visits: tuple[Visit, ...],
     place: str | None,
-    was: str | None,
     fix: Fix,
     now: datetime,
     dwell: timedelta,
@@ -687,27 +691,35 @@ def _visited(
 
     Leaving a zone for open ground closes the visit without opening another:
     the gaps between named places are the road, and the road has no name worth
-    keeping. `was` is the place of the fix before this one, which is how a
-    visit knows it was left.
+    keeping.
 
-    Closed for good only once they have been out of it for `dwell`, though. A
-    neighbourhood is named by the phone's geocode, and a fix whose geocode is
-    still on its way is open ground for a moment in the middle of the park;
-    that is not leaving. But ten hours is, and for a while it was not: the
-    Lomas crossed on the way OUT at 21:01 on 2026-10-17 was reopened by the
-    Lomas crossed on the way home at 07:19 the next morning, and one visit
-    that began and ended on the same street, ten hours long, read as the
-    slowest walk there ever was -- and as the first place of the trip.
+    Closed only once a fix has SAID they were outside it for `dwell`, though,
+    which is `Visit.outside_since`. Silence is not leaving: on 2026-10-17
+    Douwe's phone went quiet in Chapu II for sixteen minutes, and a rule that
+    timed the gap between fixes split one 56-minute visit into three pieces.
+    Nor is one fix outside, then straight back in: a neighbourhood is named
+    by the phone's geocode, and a fix whose geocode has not landed yet is open
+    ground for a moment in the middle of the park. But ten hours is leaving,
+    and for a while it was not: the Lomas crossed on the way OUT at 21:01 on
+    2026-10-17 was reopened by the Lomas crossed on the way home at 07:19 the
+    next morning, and one visit that began and ended on the same street, ten
+    hours long, read as the slowest walk there ever was -- and as the first
+    place of the trip.
 
     The fix travels with the visit so that `Visit.speed` can be asked later
     whether this was being somewhere or driving through it.
     """
     if place is None:
+        # Seen outside: remember the first such fix, and only the first.
+        if visits and visits[-1].outside_since is None:
+            return (*visits[:-1], replace(visits[-1], outside_since=now))
         return visits
     if (
         visits
         and visits[-1].place == place
-        and (was == place or now - visits[-1].until <= dwell)
+        and (
+            visits[-1].outside_since is None or now - visits[-1].outside_since <= dwell
+        )
     ):
         return (
             *visits[:-1],
@@ -716,6 +728,7 @@ def _visited(
                 until=now,
                 end_latitude=fix.latitude,
                 end_longitude=fix.longitude,
+                outside_since=None,
             ),
         )
     return (
@@ -797,6 +810,7 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
                 "longitude": visit.longitude,
                 "end_latitude": visit.end_latitude,
                 "end_longitude": visit.end_longitude,
+                "outside_since": _moment(visit.outside_since),
             }
             for visit in trip.visits
         ],
@@ -872,6 +886,7 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
                     longitude=visit.get("longitude", 0.0),
                     end_latitude=visit.get("end_latitude", 0.0),
                     end_longitude=visit.get("end_longitude", 0.0),
+                    outside_since=_read_moment(visit.get("outside_since")),
                 )
                 for visit in data.get("visits", ())
             ),
