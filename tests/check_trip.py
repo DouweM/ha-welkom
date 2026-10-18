@@ -761,6 +761,7 @@ def park_evening(fixes):
             name,
             LOMAS if name else 100.0,
         )
+    assert trip is not None
     return trip
 
 
