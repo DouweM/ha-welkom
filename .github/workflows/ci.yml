@@ -8,6 +8,13 @@ on:
   pull_request:
     branches: [main]
 
+# The newest CPython uv picks up (3.15) has no Pillow wheel yet and Pillow won't
+# build from source on it, which failed every job in `uv sync` from v0.22 on.
+# 3.14 is what current Home Assistant runs; on 3.13 the lock resolves a 2026.2
+# Home Assistant that lacks APIs this integration uses.
+env:
+  UV_PYTHON: "3.14"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -49,6 +56,8 @@ jobs:
         run: uv sync
       - name: Check auth resolution
         run: uv run python tests/check_resolution.py
+      - name: Check last heard
+        run: uv run python tests/check_heard.py
 
   # hassfest manifest/translation validation is omitted because hacs.json sets
   # content_in_root, so the integration dir is the repo root ("ha-welkom") and
