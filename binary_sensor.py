@@ -99,6 +99,10 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
     """Representation of a Welkom person tracker."""
 
     _attr_device_info: DeviceInfo | None = None
+    # Moves every poll or two while somebody is home; kept live for whatever
+    # dates a departure, but out of the recorder, where each move would be a
+    # new row with a full copy of the attributes.
+    _unrecorded_attributes = frozenset({"last_heard"})
 
     entity_description: WelkomPresenceSensorDescription
 
@@ -159,8 +163,9 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
             # is already gone, and a door sighting running out must not read
             # as them leaving. None until they've been home since a restart.
             "last_presence": self._last_presence,
-            # When any of their devices was last heard at the home, kept once
-            # it is off the same way: the off lands five to nine minutes after
+            # When any of their tracker devices (what presence rests on: not
+            # a laptop) was last heard at the home, kept once it is off the
+            # same way: the off lands five to nine minutes after
             # that (welkom's online window plus its presence hold), so a
             # departure dated from here is minutes closer to the door. None
             # until they've been home since a restart. See `heard.py`.

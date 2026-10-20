@@ -8,7 +8,8 @@ at the last frame the access point heard, and welkom keeps serving it through
 the hold. Measured against the doors on 2026-10-19 it lands 0 to 5 minutes
 after the walk-out (median about 1.5), where the off lands 6 to 11.
 
-So the binary sensor carries the moment as `last_heard`, kept once it is off
+So the binary sensor carries the moment its tracker devices were last heard
+as `last_heard`, kept once it is off
 the way `last_presence` is, and whatever stamps a departure can date it from
 there. It is not a signal that anybody left: phones drop off and come back all
 day, and only welkom's own off says the absence held.
@@ -23,16 +24,21 @@ from .models import Connection
 
 
 def last_heard(connections: Iterable[Connection], home_id: str) -> dict[str, datetime]:
-    """The newest `last_seen` of each known person's connections at the home.
+    """The newest `last_seen` of each known person's tracker connections at the home.
 
-    Every connection counts, not just the person's primary one: a watch can
-    outlast the phone, and the primary connection is the online one first,
-    which by the end of the hold none of them are.
+    Only the devices welkom bases presence on (`tracker`: phones, wearables,
+    handhelds) count. A laptop left on the wired LAN is heard every few
+    seconds after its owner has gone, and would date every departure at the
+    off. Among the trackers every connection counts, not just the primary
+    one, which is the online one first and by the end of the hold none of
+    them are.
     """
 
     heard: dict[str, datetime] = {}
     for conn in connections:
         if conn.person is None or conn.home is None or conn.home.id != home_id:
+            continue
+        if not conn.device.tracker:
             continue
         seen = conn.metadata.last_seen
         if seen is None:

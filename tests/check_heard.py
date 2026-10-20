@@ -39,11 +39,14 @@ heard = _load("heard")
 T0 = datetime(2026, 10, 19, 22, 54, 56, tzinfo=UTC)
 
 
-def conn(person: str | None, home: str | None, seen: datetime | None) -> Any:
+def conn(
+    person: str | None, home: str | None, seen: datetime | None, tracker: bool = True
+) -> Any:
     """Just what `last_heard` reads off a connection."""
     return SimpleNamespace(
         person=SimpleNamespace(id=person) if person else None,
         home=SimpleNamespace(id=home) if home else None,
+        device=SimpleNamespace(tracker=tracker),
         metadata=models.Metadata(last_seen=seen),
     )
 
@@ -60,6 +63,20 @@ def check_newest_per_person_at_the_home() -> None:
         "oasis",
     )
     assert got == {"reynaldo": T0 + timedelta(seconds=40)}, got
+
+
+def check_only_trackers_are_heard() -> None:
+    # 2026-10-20: Douwe's wired MacBook Pro was heard 4 s ago while his phone
+    # was 50 s old; it stays heard after he leaves, so it must not count.
+    got = heard.last_heard(
+        [
+            conn("douwe", "oasis", T0),
+            conn("douwe", "oasis", T0 + timedelta(hours=1), tracker=False),
+            conn("gaby", "oasis", T0 + timedelta(hours=1), tracker=False),
+        ],
+        "oasis",
+    )
+    assert got == {"douwe": T0}, got
 
 
 def check_naive_is_utc() -> None:

@@ -8,6 +8,12 @@ on:
   pull_request:
     branches: [main]
 
+# The newest CPython uv picks up has no Pillow wheel yet and Pillow won't build
+# from source on it, which failed every job in `uv sync` from v0.22 on. Home
+# Assistant itself runs 3.13.
+env:
+  UV_PYTHON: "3.13"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
