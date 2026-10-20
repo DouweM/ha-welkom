@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .client import WelkomClient
 from .const import DOMAIN
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
+from .heard import HeardWhileHome
 
 
 async def async_setup_entry(
@@ -110,6 +111,7 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
 
         self.entity_description = entity_description
         self._last_presence: str | None = None
+        self._heard = HeardWhileHome()
 
         super().__init__(coordinator, context=entity_description.context)
 
@@ -129,6 +131,9 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
         self._attr_is_on = bool(data and data.home == main_home)
         if self._attr_is_on and data:
             self._last_presence = data.presence
+        last_heard = self._heard.update(
+            self._attr_is_on, data.last_heard if data else None
+        )
 
         # Who this is, to anything that has to turn a handle back into a
         # person: a Schlage code, a WhatsApp id. One entity per person, every
@@ -154,6 +159,12 @@ class WelkomPresenceSensor(CoordinatorEntity[WelkomCoordinator], BinarySensorEnt
             # is already gone, and a door sighting running out must not read
             # as them leaving. None until they've been home since a restart.
             "last_presence": self._last_presence,
+            # When any of their devices was last heard at the home, kept once
+            # it is off the same way: the off lands five to nine minutes after
+            # that (welkom's online window plus its presence hold), so a
+            # departure dated from here is minutes closer to the door. None
+            # until they've been home since a restart. See `heard.py`.
+            "last_heard": last_heard.isoformat() if last_heard else None,
         }
 
     def _trip_entity_id(self) -> str | None:

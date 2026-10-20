@@ -49,6 +49,8 @@ jobs:
         run: uv sync
       - name: Check auth resolution
         run: uv run python tests/check_resolution.py
+      - name: Check last heard
+        run: uv run python tests/check_heard.py
 
   # hassfest manifest/translation validation is omitted because hacs.json sets
   # content_in_root, so the integration dir is the repo root ("ha-welkom") and

@@ -44,6 +44,7 @@ from .const import (
     gps_tracker_entity_id,
 )
 from .gazetteer_store import async_get_gazetteer
+from .heard import last_heard
 from .location import Circle, Fix, distance
 from .models import (
     Activity,
@@ -122,6 +123,11 @@ class PersonData(BaseModel):
     """What the placement rests on; see `ConnectedPerson.presence`."""
 
     activity: Activity | None = None
+
+    last_heard: datetime | None = None
+    """The newest `last_seen` among the person's connections at the main home:
+    the last frame an access point heard, which welkom keeps serving through
+    the presence hold. See `heard.py`."""
 
     # Do we need an eq method here for always_update=False to work?
 
@@ -421,6 +427,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         unknown_people: list[PersonData] = []
 
         people_by_state: dict[str, list[PersonData]] = defaultdict(list)
+        heard = last_heard(connections, self.home.id) if self.home else {}
         for conn in conns:
             main_home = self.home
 
@@ -443,6 +450,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 state=state,
                 presence=conn.presence,
                 activity=conn.activity,
+                last_heard=heard.get(conn.person.id) if home == main_home else None,
             )
 
             if conn.known:
