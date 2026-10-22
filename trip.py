@@ -151,7 +151,15 @@ class Trip:
     """
 
     left_at: datetime
-    """When welkom stopped speaking for them and the phone took over."""
+    """When they left: the last moment they were known to be home -- welkom
+    letting go, or the phone's last fix still there -- for a trip that starts
+    clearly out; otherwise `left_by`. See `WelkomCoordinator.observe`."""
+
+    left_by: datetime | None = None
+    """The first fix outside home, which started the trip: they had left by
+    then. With `left_at`, the window the door they went out by falls in; a
+    phone that reports every half hour can put the two far apart. None for a
+    trip from before it was kept."""
 
     latitude: float
     longitude: float
@@ -507,6 +515,7 @@ def follow(
             return None
         return Trip(
             left_at=now,
+            left_by=now,
             latitude=fix.latitude,
             longitude=fix.longitude,
             anchor_since=now,
@@ -805,6 +814,7 @@ def trip_as_dict(trip: Trip) -> dict[str, Any]:
     return {
         "v": _SCHEMA,
         "left_at": _moment(trip.left_at),
+        "left_by": _moment(trip.left_by),
         "latitude": trip.latitude,
         "longitude": trip.longitude,
         "anchor_since": _moment(trip.anchor_since),
@@ -876,6 +886,7 @@ def trip_from_dict(data: Mapping[str, Any] | None) -> Trip | None:
     try:
         return Trip(
             left_at=datetime.fromisoformat(data["left_at"]),
+            left_by=_read_moment(data.get("left_by")),
             latitude=data["latitude"],
             longitude=data["longitude"],
             anchor_since=datetime.fromisoformat(data["anchor_since"]),

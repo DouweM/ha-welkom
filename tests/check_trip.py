@@ -142,6 +142,21 @@ check(
     timedelta(seconds=16_000),
 )
 check(
+    "it was out by the same fix",
+    left.left_by - T0 if left else None,
+    timedelta(seconds=16_000),
+)
+check(
+    "which a restart keeps, and a trip from before it was kept lacks",
+    (
+        trip_mod.trip_from_dict(trip_mod.trip_as_dict(left)).left_by,
+        trip_mod.trip_from_dict(
+            {k: v for k, v in trip_mod.trip_as_dict(left).items() if k != "left_by"}
+        ).left_by,
+    ),
+    (left.left_by, None),
+)
+check(
     "a home drawn around the fix itself still starts one",
     follow(
         None,

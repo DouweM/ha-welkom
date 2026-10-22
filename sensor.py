@@ -611,6 +611,7 @@ class WelkomTripSensor(
                 over, returned_at = ended
                 self._attr_extra_state_attributes = {
                     "left_at": over.left_at,
+                    "left_by": over.left_by,
                     "returned_at": returned_at,
                     # How far it ever got, which is what tells a day out of
                     # town from an errand after the fact. Nothing else here
@@ -633,6 +634,7 @@ class WelkomTripSensor(
 
         self._attr_extra_state_attributes = {
             "left_at": trip.left_at,
+            "left_by": trip.left_by,
             "settled_at": trip.settled_at if arrived else None,
             "place": trip.place if trip.place not in home_places else None,
             "latitude": trip.latitude,
