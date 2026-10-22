@@ -127,6 +127,39 @@ check("a first fix starts a trip", t is not None, True)
 check("a new trip has not settled", t.settled, False)
 check("a fix past the floor counts as venturing out", t.ventured, True)
 
+# Off the WiFi but still in the house: no trip until a fix is outside it.
+# Gaby on 2026-10-21 left welkom at 15:10 and drove to School at 19:47.
+check("a fix in the house starts no trip", step(None, at(20), 0), None)
+check(
+    "a fix whose blur reaches the house starts no trip",
+    step(None, at(80, accuracy=30), 0),
+    None,
+)
+left = step(step(None, at(20), 0), at(300), 16_000)
+check(
+    "the trip leaves when the fix does",
+    left.left_at - T0 if left else None,
+    timedelta(seconds=16_000),
+)
+check(
+    "a home drawn around the fix itself still starts one",
+    follow(
+        None,
+        at(0),
+        HOME,
+        T0,
+        settle_radius=SETTLE_RADIUS,
+        place_radius=PLACE_RADIUS,
+        dwell=DWELL,
+        away_floor=AWAY_FLOOR,
+        still_speed=STILL_SPEED,
+        turn_slack=TURN_SLACK,
+        leave_home=False,
+    )
+    is not None,
+    True,
+)
+
 # --- time alone settles it ---------------------------------------------------
 check("a tick short of the dwell settles nothing", step(t, None, 299).settled, False)
 t2 = step(t, None, 300)

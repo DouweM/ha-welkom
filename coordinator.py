@@ -1,6 +1,7 @@
 import asyncio
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any, cast
@@ -193,6 +194,11 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         # last said something new — see `observe`.
         self._trips: dict[str, Trip] = {}
         self._seen: dict[str, datetime] = {}
+        # When each person the phone has but no trip yet was last at home:
+        # welkom letting go of them, or a later fix still inside the home the
+        # trip would leave from. What a trip starting on the first fix
+        # outside it dates `left_at` by -- see `observe`.
+        self._home_until: dict[str, datetime] = {}
         # Trips carried over a restart, waiting for the tracker to say whether
         # they are still happening — see `restore_trip`.
         self._remembered: dict[str, Trip] = {}
@@ -794,6 +800,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             else:
                 self._bases.pop(person_id, None)
             self._remembered.pop(person_id, None)
+            self._home_until.pop(person_id, None)
             if (over := self._trips.pop(person_id, None)) is not None:
                 # Remembered only if it amounted to anything. welkom losing
                 # the phone for five minutes hands the position to GPS and
@@ -821,6 +828,7 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
         home = self.home_circle
         if home is None:
             return
+        from_own_fix = False
         if person_id in self._bases:
             base = self._bases[person_id]
             if base is None and person_id not in self._trips:
@@ -833,7 +841,14 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
                 base = Circle(
                     latitude=fix.latitude, longitude=fix.longitude, radius=home.radius
                 )
+                from_own_fix = True
             home = base or home
+
+        # Welkom just let go of them: they were home until now at least.
+        # Before the check below, which a phone sitting still since its last
+        # spell off the WiFi would otherwise stop short of.
+        if person_id not in self._trips:
+            self._home_until.setdefault(person_id, now)
 
         # The same fix arriving again is not news: the phone said it once and
         # has been quiet since, which is exactly what `Trip.seen_at` is for.
@@ -875,7 +890,30 @@ class WelkomCoordinator(DataUpdateCoordinator[WelkomData]):
             turn_slack=TRIP_TURN_SLACK,
             # Of the home the trip is measured from, which `follow` decides.
             home_places=self.home_places((before.home if before else None) or home),
+            leave_home=not from_own_fix,
         )
+        if before is None:
+            if after is None:
+                # Still in the house: off the WiFi, not out. Its last moment
+                # in it is when they left, if the next fix is outside.
+                self._home_until[person_id] = max(
+                    self._home_until.get(person_id, now), spoke_at
+                )
+            else:
+                # Out, as of the first fix that says so. Dated from the last
+                # moment they were known to be home: the phone may say nothing
+                # for half an hour after the door, and a `left_at` that late
+                # loses the opening it belongs to (where_they_went.yaml
+                # matches it to the door's within 15 minutes). Only for a fix
+                # clearly out, past `TRIP_AWAY_FLOOR`: one just over the edge
+                # may be the phone's own noise, and dated an hour back it
+                # would pass `min_trip`, the guard against exactly that.
+                left = self._home_until.pop(person_id, now)
+                if (
+                    distance(fix.latitude, fix.longitude, home.latitude, home.longitude)
+                    > TRIP_AWAY_FLOOR
+                ):
+                    after = replace(after, left_at=min(left, after.left_at))
         if after is not None:
             self._trips[person_id] = after
         if after != before:

@@ -51,7 +51,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from .location import Circle, Fix, distance
+from .location import Circle, Fix, distance, fix_in_circle
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -442,6 +442,7 @@ def follow(
     still_speed: float,
     turn_slack: float,
     home_places: Collection[str] = frozenset(),
+    leave_home: bool = True,
 ) -> Trip | None:
     """Fold one observation into the trip, returning the trip as it now stands.
 
@@ -463,6 +464,13 @@ def follow(
     the same spot: wide enough to swallow a phone's own noise and a building,
     narrow enough that the next block is somewhere else. It is widened by the
     fix's own claimed accuracy, so a vague reading never invents a move.
+
+    `leave_home` says a new trip starts only with a fix outside `home`. A
+    phone off the WiFi but still in the house is not out: on 2026-10-21
+    Gaby's left welkom at 15:10 and sat in the home zone until she drove to
+    School at 19:47, and her trip said she had been out since 15:10. The
+    caller turns it off for a `home` drawn around the fix itself, which every
+    fix is inside.
 
     `home_places` are the places the house itself is in, and a fix in one of
     them is followed as open ground: nobody goes out to visit their own
@@ -495,6 +503,8 @@ def follow(
     name = place.name if place else None
 
     if trip is None:
+        if leave_home and fix_in_circle(fix, home):
+            return None
         return Trip(
             left_at=now,
             latitude=fix.latitude,
