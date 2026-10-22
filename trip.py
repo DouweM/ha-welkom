@@ -156,8 +156,8 @@ class Trip:
     clearly out; otherwise `left_by`. See `WelkomCoordinator.observe`."""
 
     left_by: datetime | None = None
-    """The first fix outside home, which started the trip: they had left by
-    then. With `left_at`, the window the door they went out by falls in; a
+    """When the first fix outside home, which started the trip, came in: they
+    had left by then. With `left_at`, the window the door they went out by falls in; a
     phone that reports every half hour can put the two far apart. None for a
     trip from before it was kept."""
 
