@@ -112,6 +112,73 @@ CASES: list[tuple[str, dict, dict, bool, str | None]] = [
     ),
 ]
 
+# The role map only serves people welkom knows. An unknown device on the
+# residents WiFi arrives as role "resident" with its IP as the person id; a
+# registered guest without an account of their own arrives as the same role.
+# name, config, headers, person_known, expected
+KNOWN_CASES: list[tuple[str, dict, dict, bool, str | None]] = [
+    (
+        "known person without an account -> role",
+        CONFIG,
+        {PERSON: "mom", ROLE: "resident"},
+        True,
+        "user-resident",
+    ),
+    (
+        "unknown device -> skips role, default",
+        CONFIG,
+        {PERSON: "10.3.30.131", ROLE: "resident"},
+        False,
+        "user-default",
+    ),
+    (
+        "unknown device, no default -> None",
+        {**CONFIG, const.CONF_DEFAULT_USER: ""},
+        {PERSON: "10.3.30.131", ROLE: "resident"},
+        False,
+        None,
+    ),
+    (
+        "no person header -> skips role",
+        {**CONFIG, const.CONF_DEFAULT_USER: ""},
+        {ROLE: "resident"},
+        False,
+        None,
+    ),
+    (
+        "unknown device, option off -> role",
+        {**CONFIG, const.CONF_ROLE_REQUIRES_PERSON: False},
+        {PERSON: "10.3.30.131", ROLE: "resident"},
+        False,
+        "user-resident",
+    ),
+]
+
+KNOWN = const.WELKOM_FIELD_HEADERS["known"]
+
+# name, headers, person_in_people, expected
+IDENTITY_CASES: list[tuple[str, dict, bool, bool]] = [
+    ("person welkom has", {PERSON: "belem", KNOWN: "true"}, True, True),
+    (
+        "unknown device's IP as person",
+        {PERSON: "10.3.30.131", KNOWN: "false"},
+        False,
+        False,
+    ),
+    # The person id decides when there is one: a known header can't vouch for
+    # a person welkom doesn't have.
+    (
+        "person welkom lacks, known header",
+        {PERSON: "ghost", KNOWN: "true"},
+        False,
+        False,
+    ),
+    ("known device with no person", {ROLE: "staff", KNOWN: "true"}, False, True),
+    ("known header in another case", {ROLE: "staff", KNOWN: "True"}, False, True),
+    ("unknown device with no person", {ROLE: "resident", KNOWN: "false"}, False, False),
+    ("no headers at all", {}, False, False),
+]
+
 FULL_ROLE = {const.CONF_REQUIRE_FULL_ROLE: True}
 
 # name, config, headers, assigned_role, people_known, expected
@@ -180,6 +247,22 @@ def main() -> int:
             print(f"      expected {expected!r}")
             failed += 1
 
+    for name, config, headers, known, expected in KNOWN_CASES:
+        got = resolve(config, headers, True, known)
+        ok = got == expected
+        print(f"{'PASS' if ok else 'FAIL'}: known: {name} -> {got!r}")
+        if not ok:
+            print(f"      expected {expected!r}")
+            failed += 1
+
+    for name, headers, in_people, expected in IDENTITY_CASES:
+        got = const.identity_known(headers, in_people)
+        ok = got is expected
+        print(f"{'PASS' if ok else 'FAIL'}: identity: {name} -> {got!r}")
+        if not ok:
+            print(f"      expected {expected!r}")
+            failed += 1
+
     for name, config, headers, assigned, known, expected in TRUST_CASES:
         got = trust(config, headers, assigned, known)
         ok = got is expected
@@ -188,7 +271,7 @@ def main() -> int:
             print(f"      expected {expected!r}")
             failed += 1
 
-    total = len(CASES) + len(TRUST_CASES)
+    total = len(CASES) + len(KNOWN_CASES) + len(IDENTITY_CASES) + len(TRUST_CASES)
     print(f"\n{total - failed}/{total} passed")
     return 1 if failed else 0
 

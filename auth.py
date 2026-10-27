@@ -59,6 +59,7 @@ from .const import (
     CONF_AUTH_ENABLED,
     DOMAIN,
     WELKOM_FIELD_HEADERS,
+    identity_known,
     person_trust,
     resolve_mapped_user_id,
 )
@@ -101,8 +102,8 @@ class WelkomAuthProvider(AuthProvider):
             for entry in self.hass.config_entries.async_entries(DOMAIN)
         )
 
-    def _assigned_role(self, person_id: str) -> str | None:
-        """The person's uncapped assigned role, from the welkom coordinator.
+    def _person(self, person_id: str) -> Any | None:
+        """The welkom person with this id, from the welkom coordinator.
 
         Sourced from ``/api/people`` (via the coordinator's people cache), not a
         header, so no forge-able input decides trust. Returns None when unknown.
@@ -112,16 +113,19 @@ class WelkomAuthProvider(AuthProvider):
             people = getattr(coordinator, "people", None)
             person = people.get(person_id) if people else None
             if person is not None:
-                return getattr(person, "role_id", None)
+                return person
         return None
 
-    def _person_trusted(self, request: Request) -> bool | None:
+    def _assigned_role(self, person_id: str) -> str | None:
+        """The person's uncapped assigned role, or None when unknown."""
+        return getattr(self._person(person_id), "role_id", None)
+
+    def _person_trusted(self, request: Request, person_id: str) -> bool | None:
         """Whether the request's person identity may unlock their own account.
 
         The decision itself lives in `person_trust`; this just gathers what it
         needs out of Home Assistant. None means "can't tell" — see there.
         """
-        person_id = request.headers.get(WELKOM_FIELD_HEADERS["person"], "").strip()
         return person_trust(
             self.config,
             request.headers,
@@ -134,7 +138,8 @@ class WelkomAuthProvider(AuthProvider):
         if not self.config.get(CONF_AUTH_ENABLED) or request is None:
             return None
 
-        person_trusted = self._person_trusted(request)
+        person_id = request.headers.get(WELKOM_FIELD_HEADERS["person"], "").strip()
+        person_trusted = self._person_trusted(request, person_id)
         if person_trusted is None:
             # We can't judge this identity, so we don't act on it. No account is
             # unlocked and the normal login form takes over — the one outcome
@@ -144,7 +149,14 @@ class WelkomAuthProvider(AuthProvider):
             )
             return None
 
-        return resolve_mapped_user_id(self.config, request.headers, person_trusted)
+        # An unknown device's person id is its IP, which welkom has no person
+        # for, so it is not known here and never reaches the role map.
+        person_known = identity_known(
+            request.headers, bool(person_id) and self._person(person_id) is not None
+        )
+        return resolve_mapped_user_id(
+            self.config, request.headers, person_trusted, person_known
+        )
 
     async def async_login_flow(self, context: dict[str, Any] | None) -> LoginFlow:
         """Return a login flow pre-resolved to the mapped user (if any)."""

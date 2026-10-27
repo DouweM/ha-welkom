@@ -38,6 +38,7 @@
           "auth_enabled": "Enable auth routing",
           "auth_allow_bypass_login": "Skip the login prompt",
           "auth_require_full_role": "Only identify people at their full role",
+          "auth_role_requires_person": "Only use role accounts for known people",
           "auth_default_user": "Default user"
         },
         "data_description": {
@@ -45,7 +46,8 @@
           "auth_enabled": "Inject a welkom auth provider that identifies each request from welkom's forward-auth headers.",
           "auth_allow_bypass_login": "Log matched users straight in instead of showing a login screen.",
           "auth_require_full_role": "Recommended. Only log someone into their own account on networks that grant them their full role; on a lower-trust network they fall back to the role account, so a spoofed device can't escalate past the network's max role.",
-          "auth_default_user": "Fallback Home Assistant user when neither the person nor the role maps to one."
+          "auth_role_requires_person": "Recommended. Only log someone into their role's account when welkom knows who they are, or knows the device. Every device on a network gets that network's default role, so otherwise an unknown device that joined it gets the role account too.",
+          "auth_default_user": "Fallback Home Assistant user when neither the person nor the role maps to one, including for devices welkom doesn't know."
         }
       },
       "locations": {

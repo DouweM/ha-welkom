@@ -37,11 +37,13 @@ from .const import (
     CONF_HOME_ID,
     CONF_PERSON_USERS,
     CONF_REQUIRE_FULL_ROLE,
+    CONF_ROLE_REQUIRES_PERSON,
     CONF_ROLE_USERS,
     DEFAULT_ALLOW_BYPASS_LOGIN,
     DEFAULT_AUTH_ENABLED,
     DEFAULT_CREATE_ENTITIES,
     DEFAULT_REQUIRE_FULL_ROLE,
+    DEFAULT_ROLE_REQUIRES_PERSON,
     DOMAIN,
     FRONTEND_SCRIPT_URL,
     FRONTEND_SCRIPT_VERSION,
@@ -282,6 +284,9 @@ def _auth_config(config_entry: WelkomConfigEntry) -> dict[str, Any]:
         ),
         CONF_REQUIRE_FULL_ROLE: options.get(
             CONF_REQUIRE_FULL_ROLE, DEFAULT_REQUIRE_FULL_ROLE
+        ),
+        CONF_ROLE_REQUIRES_PERSON: options.get(
+            CONF_ROLE_REQUIRES_PERSON, DEFAULT_ROLE_REQUIRES_PERSON
         ),
         CONF_PERSON_USERS: dict(options.get(CONF_PERSON_USERS, {})),
         CONF_ROLE_USERS: dict(options.get(CONF_ROLE_USERS, {})),

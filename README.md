@@ -226,12 +226,28 @@ welkom people and roles to Home Assistant users:
    **person** and **role** to a Home Assistant user.
 
 Each request resolves in order: the person's mapped user → the role's mapped
-user → the default user. So a recognized person logs into their own account, an
-unrecognized person on a known network logs into the shared account for their
-role, and anyone else lands on the default — nobody gets bounced to a login
-loop. The Home Assistant users must already exist; auth routing never creates
+user → the default user. So a recognized person logs into their own account, a
+person welkom knows who has no account of their own logs into the shared account
+for their role, and anyone else lands on the default — nobody gets bounced to a
+login loop. The Home Assistant users must already exist; auth routing never creates
 them. (Role targets are best pointed at *shared* accounts — a downgraded person,
 see below, falls back to one.)
+
+### Role accounts are for people welkom knows
+
+Every device on a network gets at least that network's default role, including
+one welkom has never seen: an unknown phone that joined the residents WiFi
+arrives with the same role as a registered guest. *Only use role accounts for
+known people* (on by default) honors the role map only when the request's person
+is one welkom knows, read from `/api/people` like the assigned role below, or the
+request comes from a known device that belongs to nobody (a shared TV, a
+server). An unknown device's person id is its IP, so it skips the role map and
+gets the default user, if any, or the login page. Turn it off to let the role
+map serve anyone on the network.
+
+New in v0.31.0 and on by default, so on an existing install unknown devices stop
+getting role accounts on upgrade. Map a default user, or turn the option off, to
+keep letting them in.
 
 ### Not identifying people on low-trust networks
 

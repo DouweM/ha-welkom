@@ -29,11 +29,13 @@ from .const import (
     CONF_PERSON_GPS_TRACKERS,
     CONF_PERSON_USERS,
     CONF_REQUIRE_FULL_ROLE,
+    CONF_ROLE_REQUIRES_PERSON,
     CONF_ROLE_USERS,
     DEFAULT_ALLOW_BYPASS_LOGIN,
     DEFAULT_AUTH_ENABLED,
     DEFAULT_CREATE_ENTITIES,
     DEFAULT_REQUIRE_FULL_ROLE,
+    DEFAULT_ROLE_REQUIRES_PERSON,
     DOMAIN,
 )
 
@@ -177,6 +179,9 @@ class WelkomOptionsFlow(OptionsFlow):
             self._options[CONF_AUTH_ENABLED] = user_input[CONF_AUTH_ENABLED]
             self._options[CONF_ALLOW_BYPASS_LOGIN] = user_input[CONF_ALLOW_BYPASS_LOGIN]
             self._options[CONF_REQUIRE_FULL_ROLE] = user_input[CONF_REQUIRE_FULL_ROLE]
+            self._options[CONF_ROLE_REQUIRES_PERSON] = user_input[
+                CONF_ROLE_REQUIRES_PERSON
+            ]
             self._options[CONF_DEFAULT_USER] = user_input.get(CONF_DEFAULT_USER, "")
             return await self.async_step_locations()
 
@@ -200,6 +205,12 @@ class WelkomOptionsFlow(OptionsFlow):
                     CONF_REQUIRE_FULL_ROLE,
                     default=current.get(
                         CONF_REQUIRE_FULL_ROLE, DEFAULT_REQUIRE_FULL_ROLE
+                    ),
+                ): bool,
+                vol.Required(
+                    CONF_ROLE_REQUIRES_PERSON,
+                    default=current.get(
+                        CONF_ROLE_REQUIRES_PERSON, DEFAULT_ROLE_REQUIRES_PERSON
                     ),
                 ): bool,
                 vol.Optional(

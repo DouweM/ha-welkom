@@ -133,6 +133,7 @@ MAP_IMAGE_SCRIPT_URL = f"/{DOMAIN}/map-image.js"
 WELKOM_FIELD_HEADERS: dict[str, str] = {
     "person": "X-Welcome-Person-Id",
     "role": "X-Welcome-Role-Id",
+    "known": "X-Welcome-Known",
 }
 
 # Options keys (stored on the config entry's options).
@@ -147,10 +148,16 @@ CONF_DEFAULT_USER = "auth_default_user"  # HA user id, or "" for none
 # account — a spoofed MAC can't reach a higher-privilege account than the
 # network's max role allows. See auth.py.
 CONF_REQUIRE_FULL_ROLE = "auth_require_full_role"
+# When set, the role map only applies to people welkom knows. Every device on a
+# network gets at least the network's default role, so without this an unknown
+# phone that joined the residents WiFi logs into the residents' shared account
+# just as a registered guest without an account of their own would.
+CONF_ROLE_REQUIRES_PERSON = "auth_role_requires_person"
 
 DEFAULT_AUTH_ENABLED = False
 DEFAULT_ALLOW_BYPASS_LOGIN = True
 DEFAULT_REQUIRE_FULL_ROLE = True
+DEFAULT_ROLE_REQUIRES_PERSON = True
 
 # Bundled script that persists the auth token to localStorage so the browser
 # does not re-run the login flow on every refresh.
@@ -180,7 +187,7 @@ def person_trust(
     Kept here, free of Home Assistant imports, like ``resolve_mapped_user_id``,
     so it can be unit-tested in isolation.
     """
-    if not config.get(CONF_REQUIRE_FULL_ROLE, True):
+    if not config.get(CONF_REQUIRE_FULL_ROLE, DEFAULT_REQUIRE_FULL_ROLE):
         return True
 
     person = (headers.get(WELKOM_FIELD_HEADERS["person"]) or "").strip()
@@ -211,19 +218,40 @@ def gps_tracker_entity_id(
     return value if "." in value else f"device_tracker.{value}"
 
 
+def identity_known(headers: Mapping[str, str], person_in_people: bool) -> bool:
+    """Whether welkom knows who, or what, a request comes from.
+
+    With a person id, only if welkom has that person (``person_in_people``, read
+    from ``/api/people`` like the assigned role): an unknown device's person id
+    is its IP, never a person's slug. Without one, it's a known device that
+    belongs to nobody (a shared TV, a server), and welkom says so in
+    ``X-Welcome-Known``, which the reverse proxy strips from client requests
+    like the other welkom headers. Kept here, free of Home Assistant imports,
+    so it can be unit-tested in isolation.
+    """
+    person = (headers.get(WELKOM_FIELD_HEADERS["person"]) or "").strip()
+    if person:
+        return person_in_people
+    known = (headers.get(WELKOM_FIELD_HEADERS["known"]) or "").strip()
+    return known.lower() == "true"
+
+
 def resolve_mapped_user_id(
     config: Mapping[str, Any],
     headers: Mapping[str, str],
     person_trusted: bool = True,
+    person_known: bool = True,
 ) -> str | None:
     """Resolve welkom identity headers to an HA user id via the config maps.
 
     Order: person map -> role map -> default user. ``person_trusted`` gates the
     person step: when False (the network downgraded the person below their
     assigned role, so their identity isn't trusted here) the person map is
-    skipped and resolution starts at the role. ``headers`` is any mapping with
-    ``.get`` (e.g. an aiohttp request's headers). Kept here, free of Home
-    Assistant imports, so it can be unit-tested in isolation.
+    skipped and resolution starts at the role. ``person_known`` gates the role
+    step when ``role_requires_person`` is set: False (see ``identity_known``)
+    skips the role map, so only the default user is left. ``headers`` is any
+    mapping with ``.get`` (e.g. an aiohttp request's headers). Kept here, free
+    of Home Assistant imports, so it can be unit-tested in isolation.
     """
     person = (headers.get(WELKOM_FIELD_HEADERS["person"]) or "").strip()
     if person and person_trusted:
@@ -232,7 +260,10 @@ def resolve_mapped_user_id(
             return user_id
 
     role = (headers.get(WELKOM_FIELD_HEADERS["role"]) or "").strip()
-    if role:
+    if role and (
+        person_known
+        or not config.get(CONF_ROLE_REQUIRES_PERSON, DEFAULT_ROLE_REQUIRES_PERSON)
+    ):
         user_id = config.get(CONF_ROLE_USERS, {}).get(role)
         if user_id:
             return user_id
