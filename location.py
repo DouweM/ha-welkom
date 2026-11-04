@@ -142,6 +142,28 @@ def fix_at_home(home: Circle | None, fix: Fix, *, was_home: bool) -> bool:
     return fix_clearly_in_circle(fix, home)
 
 
+def fix_too_old_for_home(fix: Fix, lost_for: timedelta, max_age: timedelta) -> bool:
+    """Whether a fix from inside the home is too old to keep somebody there.
+
+    An old fix can't say they left, but it can't say they stayed either: a phone
+    without background location reports nothing as it leaves, so its last word
+    is the house. On 2026-11-04 Gaby read `home` for hours from a fix made in the
+    house, while welkom had lost her and she was in Cuajimalpa. So once welkom has
+    not seen them for ``max_age`` (``lost_for``) and the phone has not spoken for
+    as long either, they are out, somewhere nobody knows.
+
+    Both clocks, because each alone is an ordinary day at home. A phone is often
+    silent for hours while on the WiFi, and off the WiFi it keeps fixing from the
+    house (2026-11-01: half an hour off it, fixes all the way). An unreachable
+    welkom isn't `lost_for` for anybody it had placed: it answers 503 and its last
+    placement is kept.
+
+    Still a guess, since a phone can sit silent off the WiFi in the house too. It
+    says how to show them, not that they left.
+    """
+    return fix.age > max_age and lost_for > max_age
+
+
 def fix_places_within_home(
     home: Circle | None, fix: Fix | None, max_age: timedelta
 ) -> bool:

@@ -64,6 +64,7 @@ from .location import (
     fix_at_home,
     fix_in_circle,
     fix_places_within_home,
+    fix_too_old_for_home,
     placement_holds,
     placement_lingers,
 )
@@ -247,6 +248,9 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         # The last placement welkom confirmed, and when: kept for a while
         # after welkom loses the person, see _async_update_attrs.
         self._held: tuple[PersonData, datetime] | None = None
+        # When welkom last had them, unlike `_held` kept while the phone speaks.
+        self._welkom_at: datetime | None = None
+        self._quiet_home = False
         self._holding = False
         # The last neighbourhood the phone's geocode named, for the fixes it
         # doesn't geocode; and the fix whose geocode is being waited for.
@@ -502,6 +506,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         gps_in_charge = self._source == "gps"
 
         self._holding = False
+        was_quiet_home, self._quiet_home = self._quiet_home, False
         use_welkom = data is not None and placement_holds(
             self._home_circle(data), fix, GPS_MAX_AGE, gps_in_charge=gps_in_charge
         )
@@ -525,6 +530,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             use_welkom = False
         if data is not None and use_welkom:
             self._held = (data, now)
+            self._welkom_at = now
         elif (
             data is None
             # A room may only be resurrected if the person never left in the
@@ -628,7 +634,11 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             # tracker last said (see `location.fix_at_home`): coming in takes
             # a fix entirely inside the zone, staying takes one that may be.
             # The source stays "gps"; the room comes when welkom has them.
-            was_home = not gps_in_charge or self._attr_state == STATE_HOME
+            # Nor is `quiet_home` having left: the same fix, or a blurry fresh one
+            # from indoors, must not fall through to naming the neighbourhood.
+            was_home = (
+                not gps_in_charge or self._attr_state == STATE_HOME or was_quiet_home
+            )
             gazetteer = async_get_gazetteer(self.hass) if self.hass else None
             # What somebody's phone said nearest here, for a fix iOS didn't
             # geocode: driving, it rarely does (2026-10-17 21:07, Gaby 2.8 km
@@ -647,7 +657,24 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
                 else None
             )
             self._described_by = geocode or nearby
-            if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
+            if self._welkom_at is None:
+                # Since a restart nobody has heard from welkom about them: count
+                # from here, not from a home we know nothing about.
+                self._welkom_at = now
+            at_home = fix_at_home(self.coordinator.home_circle, fix, was_home=was_home)
+            if at_home and fix_too_old_for_home(
+                fix, now - self._welkom_at, GPS_MAX_AGE
+            ):
+                # Their last word is the house and nobody has heard from them
+                # since. Keeps source "gps" and the fix, so they read as out, with
+                # the fix's age beside it, like anybody else whose phone went quiet.
+                # A guess, and `quiet_home` says so: a phone silent off the WiFi
+                # can also be in the house (2026-10-21, hours of it), so nothing
+                # that acts on a departure should take this for one.
+                self._attr_state = STATE_NOT_HOME
+                self._area = None
+                self._quiet_home = True
+            elif at_home:
                 self._attr_state = STATE_HOME
                 self._area = None
                 if geocode is not None and gazetteer is not None:
@@ -744,6 +771,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             attr["gps_tracker"] = self._gps_entity_id
             attr["source"] = self._source
             attr["held"] = self._holding
+            attr["quiet_home"] = self._quiet_home
 
         if self._source == "gps":
             # What the geocoder calls the spot, which the state never is: the

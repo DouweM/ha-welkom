@@ -196,6 +196,31 @@ check("90m/35m is out, home or not", at_home(HOME, leaving, was_home=True), Fals
 check("no home zone: never home", at_home(None, back_inside, was_home=True), False)
 
 
+# --- a fix from the house, long ago ------------------------------------------
+# 2026-11-04: Gaby's phone (location "when in use") last spoke in the house at
+# 14:00; welkom lost her at 15:36, and she read `home` from Cuajimalpa for hours.
+too_old = location.fix_too_old_for_home
+quiet = fix_at(10, 15, age=timedelta(hours=2))
+check(
+    "old fix, welkom long gone: out", too_old(quiet, timedelta(hours=2), MAX_AGE), True
+)
+check(
+    "old fix, welkom only just lost them: an idle phone, still home",
+    too_old(quiet, timedelta(minutes=5), MAX_AGE),
+    False,
+)
+check(
+    "welkom long gone, phone still fixing from the house: home",
+    too_old(fix_at(10, 15, age=timedelta(minutes=7)), timedelta(minutes=30), MAX_AGE),
+    False,
+)
+check(
+    "exactly at the limit is not past it",
+    too_old(fix_at(10, 15, age=MAX_AGE), MAX_AGE, MAX_AGE),
+    False,
+)
+
+
 # --- where in the home, when welkom has no room ----------------------------
 # 2026-10-17 17:34: DNS put Douwe home with no room, and the map pinned him to
 # the home zone's center while his phone's fix had the right end of the house.
