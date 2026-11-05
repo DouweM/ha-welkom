@@ -506,7 +506,6 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         gps_in_charge = self._source == "gps"
 
         self._holding = False
-        was_quiet_home, self._quiet_home = self._quiet_home, False
         use_welkom = data is not None and placement_holds(
             self._home_circle(data), fix, GPS_MAX_AGE, gps_in_charge=gps_in_charge
         )
@@ -574,6 +573,31 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             # and her evening's itinerary was declared over. `stale` is what
             # covers a phone that never comes back.
 
+        # Their last word is the house and nobody has heard from them since. Out,
+        # somewhere nobody knows, so with no position at all: the old fix on a map
+        # reads as them standing at the gate. A guess, and `quiet_home` says so: a
+        # phone silent off the WiFi can also be in the house (2026-10-21, hours of
+        # it), so nothing that acts on a departure should take this for one.
+        # With no fix at all it stands as it was: the phone blinking unavailable
+        # says nothing, and clearing this would read as them having left.
+        if data and use_welkom:
+            self._quiet_home = False
+        elif fix:
+            if self._welkom_at is None:
+                # Since a restart nobody has heard from welkom about them: count
+                # from here, not from a home we know nothing about.
+                self._welkom_at = now
+            self._quiet_home = fix_too_old_for_home(
+                fix, now - self._welkom_at, GPS_MAX_AGE
+            ) and fix_at_home(
+                self.coordinator.home_circle,
+                fix,
+                was_home=not gps_in_charge or self._attr_state == STATE_HOME,
+            )
+            if self._quiet_home:
+                self._area = None
+                self._held = None
+
         if data and use_welkom:
             self._source = "welkom"
             # A neighbourhood from before welkom had them isn't where they are.
@@ -609,7 +633,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
                     self._attr_latitude = position.latitude
                     self._attr_longitude = position.longitude
                     self._attr_location_accuracy = position.accuracy
-        elif fix:
+        elif fix and not self._quiet_home:
             # Position from the phone; zones and state follow from it, the way
             # they do for any GPS tracker.
             self._source = "gps"
@@ -634,11 +658,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
             # tracker last said (see `location.fix_at_home`): coming in takes
             # a fix entirely inside the zone, staying takes one that may be.
             # The source stays "gps"; the room comes when welkom has them.
-            # Nor is `quiet_home` having left: the same fix, or a blurry fresh one
-            # from indoors, must not fall through to naming the neighbourhood.
-            was_home = (
-                not gps_in_charge or self._attr_state == STATE_HOME or was_quiet_home
-            )
+            was_home = not gps_in_charge or self._attr_state == STATE_HOME
             gazetteer = async_get_gazetteer(self.hass) if self.hass else None
             # What somebody's phone said nearest here, for a fix iOS didn't
             # geocode: driving, it rarely does (2026-10-17 21:07, Gaby 2.8 km
@@ -657,24 +677,7 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
                 else None
             )
             self._described_by = geocode or nearby
-            if self._welkom_at is None:
-                # Since a restart nobody has heard from welkom about them: count
-                # from here, not from a home we know nothing about.
-                self._welkom_at = now
-            at_home = fix_at_home(self.coordinator.home_circle, fix, was_home=was_home)
-            if at_home and fix_too_old_for_home(
-                fix, now - self._welkom_at, GPS_MAX_AGE
-            ):
-                # Their last word is the house and nobody has heard from them
-                # since. Keeps source "gps" and the fix, so they read as out, with
-                # the fix's age beside it, like anybody else whose phone went quiet.
-                # A guess, and `quiet_home` says so: a phone silent off the WiFi
-                # can also be in the house (2026-10-21, hours of it), so nothing
-                # that acts on a departure should take this for one.
-                self._attr_state = STATE_NOT_HOME
-                self._area = None
-                self._quiet_home = True
-            elif at_home:
+            if fix_at_home(self.coordinator.home_circle, fix, was_home=was_home):
                 self._attr_state = STATE_HOME
                 self._area = None
                 if geocode is not None and gazetteer is not None:
