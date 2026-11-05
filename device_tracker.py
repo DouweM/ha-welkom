@@ -1,6 +1,6 @@
 """Device tracker platform for Welkom."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import math
@@ -61,9 +61,11 @@ from .gazetteer_store import async_get_gazetteer
 from .location import (
     Circle,
     Fix,
+    KeptFix,
     fix_at_home,
     fix_in_circle,
     fix_places_within_home,
+    fix_time,
     fix_too_old_for_home,
     placement_holds,
     placement_lingers,
@@ -201,7 +203,7 @@ class WelkomTrackerDescription(TrackerEntityDescription):
         )
 
 
-class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
+class WelkomTracker(CoordinatorEntity[WelkomCoordinator], RestoreEntity, TrackerEntity):
     """Where a welkom person is.
 
     Welkom places people by the devices it sees on the network: a room of the
@@ -250,6 +252,8 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         self._held: tuple[PersonData, datetime] | None = None
         # When welkom last had them, unlike `_held` kept while the phone speaks.
         self._welkom_at: datetime | None = None
+        # The fix from before a restart, which would otherwise look brand new.
+        self._kept_fix: KeptFix | None = None
         self._quiet_home = False
         self._holding = False
         # The last neighbourhood the phone's geocode named, for the fixes it
@@ -301,6 +305,8 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         )
         if self._gps_entity_id is None:
             return
+        if (last := await self.async_get_last_extra_data()) is not None:
+            self._restore(last.as_dict())
         # The companion app puts the phone's geocoded-location sensor on the
         # same device as its tracker, with a unique id that ends in
         # `_geocoded_location`. Found rather than configured: the household
@@ -323,6 +329,40 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         )
         self.async_on_remove(self._cancel_geocode_wait)
         self._async_update_attrs()
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData | None:
+        """How old the evidence is, which a restart can't tell by itself."""
+        if self._gps_entity_id is None:
+            return None
+        # A phone not loaded yet has no fix to give, but one kept is still true.
+        fix = self._fix() or self._kept_fix
+        return RestoredExtraData(
+            {
+                "fix": {
+                    "latitude": fix.latitude,
+                    "longitude": fix.longitude,
+                    "at": fix.at.isoformat(),
+                }
+                if fix and fix.at
+                else None,
+                "welkom_at": self._welkom_at.isoformat() if self._welkom_at else None,
+            }
+        )
+
+    def _restore(self, data: Mapping[str, Any]) -> None:
+        """Read back `extra_restore_state_data`, or keep nothing if it can't be read."""
+        try:
+            if raw := data.get("fix"):
+                self._kept_fix = KeptFix(
+                    latitude=raw["latitude"],
+                    longitude=raw["longitude"],
+                    at=datetime.fromisoformat(raw["at"]),
+                )
+            if welkom_at := data.get("welkom_at"):
+                self._welkom_at = datetime.fromisoformat(welkom_at)
+        except (KeyError, TypeError, ValueError):
+            self._kept_fix = None
 
     async def async_locate(self, **_: Any) -> None:
         """`welkom.locate` is for roaming homes; a person is placed by their phone."""
@@ -430,12 +470,15 @@ class WelkomTracker(CoordinatorEntity[WelkomCoordinator], TrackerEntity):
         longitude = state.attributes.get(ATTR_LONGITUDE)
         if latitude is None or longitude is None:
             return None
+        at, self._kept_fix = fix_time(
+            self._kept_fix, latitude, longitude, state.last_updated
+        )
         return Fix(
             latitude=latitude,
             longitude=longitude,
             accuracy=state.attributes.get(ATTR_GPS_ACCURACY) or 0,
-            age=dt_util.utcnow() - state.last_updated,
-            at=state.last_updated,
+            age=dt_util.utcnow() - at,
+            at=at,
         )
 
     def _geocode(self, fix: Fix) -> Geocode | None:

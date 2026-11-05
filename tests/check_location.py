@@ -9,7 +9,7 @@ by path.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 import importlib.util
 import pathlib
 import sys
@@ -219,6 +219,30 @@ check(
     too_old(fix_at(10, 15, age=MAX_AGE), MAX_AGE, MAX_AGE),
     False,
 )
+
+
+# --- a fix across a restart ---------------------------------------------------
+# 2026-11-05: the restart reset `last_updated`, and a fix twelve hours old put Gaby
+# home for 15 minutes.
+fix_time = location.fix_time
+made = datetime(2026, 11, 5, 4, 46, tzinfo=UTC)
+booted = datetime(2026, 11, 5, 16, 44, tzinfo=UTC)
+kept_fix = location.KeptFix(latitude=19.4, longitude=-99.2, at=made)
+at, kept_after = fix_time(kept_fix, 19.4, -99.2, booted)
+check("the restored fix keeps its time", at, made)
+check("...on every read", fix_time(kept_after, 19.4, -99.2, booted)[0], made)
+later = booted + timedelta(minutes=5)
+check(
+    "the phone speaking from the same spot is news",
+    fix_time(kept_after, 19.4, -99.2, later),
+    (later, None),
+)
+check(
+    "a new position after a restart is news",
+    fix_time(kept_fix, 19.5, -99.2, booted),
+    (booted, None),
+)
+check("nothing kept", fix_time(None, 19.4, -99.2, booted), (booted, None))
 
 
 # --- where in the home, when welkom has no room ----------------------------

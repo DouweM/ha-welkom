@@ -12,7 +12,7 @@ booting HA.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import math
 
@@ -140,6 +140,41 @@ def fix_at_home(home: Circle | None, fix: Fix, *, was_home: bool) -> bool:
     if was_home:
         return fix_in_circle(fix, home)
     return fix_clearly_in_circle(fix, home)
+
+
+@dataclass(frozen=True, kw_only=True)
+class KeptFix:
+    """A phone's fix as it was before a restart, and when it was really made."""
+
+    latitude: float
+    longitude: float
+    at: datetime
+    updated: datetime | None = None
+    """The phone state's `last_updated` once it has been matched against."""
+
+
+def fix_time(
+    kept: KeptFix | None, latitude: float, longitude: float, updated: datetime
+) -> tuple[datetime, KeptFix | None]:
+    """When a phone's fix was made, and what is still kept for next time.
+
+    `last_updated` is all a state says, and a restart resets it, so a fix made
+    twelve hours ago looks a second old. On 2026-11-05 that put Gaby home, from
+    wherever she was, for 15 minutes. So the fix from before a restart keeps its
+    time, for as long as the phone state is the one restored: the same position,
+    and `last_updated` as it first read after the restart. Any newer write is the
+    phone speaking, even from the same spot, and nothing is kept after that.
+    """
+    if kept is None:
+        return updated, None
+    if kept.updated is None and (kept.latitude, kept.longitude) == (
+        latitude,
+        longitude,
+    ):
+        kept = replace(kept, updated=updated)
+    if kept.updated == updated:
+        return kept.at, kept
+    return updated, None
 
 
 def fix_too_old_for_home(fix: Fix, lost_for: timedelta, max_age: timedelta) -> bool:
