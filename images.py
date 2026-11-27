@@ -105,11 +105,17 @@ class WelkomImageView(HomeAssistantView):
                     self._cache.popitem(last=False)
 
         content, content_type = cached
+        # A versioned URL names one file forever, so a browser may keep it for a
+        # year without asking again. A day meant every phone re-downloaded the
+        # drone shots (5 MB) the first time it opened a map each day, since
+        # there is no ETag to revalidate against: the whole file, every time.
+        # Private, because oasis.fan sits behind Cloudflare: a shared cache
+        # holding a copy would hand it out without welkom's forward auth.
         return web.Response(
             body=content,
             content_type=content_type,
             headers={
-                "Cache-Control": "public, max-age=86400"
+                "Cache-Control": "private, max-age=31536000, immutable"
                 if "v" in request.query
                 else "no-cache"
             },
