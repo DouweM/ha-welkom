@@ -48,6 +48,8 @@ from .const import (
     FRONTEND_SCRIPT_URL,
     FRONTEND_SCRIPT_VERSION,
     MAP_IMAGE_SCRIPT_URL,
+    TIMINGS_SCRIPT_URL,
+    TIMINGS_SCRIPT_VERSION,
 )
 from .coordinator import WelkomConfigEntry, WelkomCoordinator
 from .gazetteer_store import async_setup_gazetteer
@@ -162,6 +164,13 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
                 str(Path(__file__).parent / "welkom-activity.js"),
                 cache_headers=True,
             ),
+            # How the dashboards feel on each device (load, cameras, stutter),
+            # beaconed to welkom through Traefik and logged to Logfire there.
+            StaticPathConfig(
+                TIMINGS_SCRIPT_URL,
+                str(Path(__file__).parent / "welkom-timings.js"),
+                cache_headers=True,
+            ),
         ]
     )
     # Dedicated beacon endpoints: welkom's forward auth counts these (and only
@@ -171,6 +180,7 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
     frontend.add_extra_js_url(
         hass, f"{FRONTEND_SCRIPT_URL}?v={FRONTEND_SCRIPT_VERSION}"
     )
+    frontend.add_extra_js_url(hass, f"{TIMINGS_SCRIPT_URL}?v={TIMINGS_SCRIPT_VERSION}")
 
 
 async def async_setup_entry(
