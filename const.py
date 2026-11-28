@@ -109,7 +109,7 @@ TRIP_TURN_SLACK = 50.0
 FRONTEND_SCRIPT_URL = f"/{DOMAIN}/welkom-activity.js"
 FRONTEND_SCRIPT_VERSION = 10  # bump to cache-bust browsers when the script changes
 TIMINGS_SCRIPT_URL = f"/{DOMAIN}/welkom-timings.js"
-TIMINGS_SCRIPT_VERSION = 1  # bump to cache-bust browsers when the script changes
+TIMINGS_SCRIPT_VERSION = 2  # bump to cache-bust browsers when the script changes
 
 # Dedicated ping endpoints for the frontend script. Natural frontend URLs
 # (like /manifest.json) are also fetched by clients in the background, so the

@@ -1,13 +1,14 @@
 // Reports how a dashboard feels on this device to welkom, which logs it to
 // Logfire under whose device it is.
 //
-// One report per cold page load, and one each time the page comes back on
-// screen after a while away (the companion app foregrounded, which is how a
-// phone mostly opens it). Each report watches for WINDOW_MS:
+// One report per cold page load, one each time the page comes back on screen
+// after a while away (the companion app foregrounded, which is how a phone
+// mostly opens it), and one per move to another view. Each report watches for
+// WINDOW_MS, or until the next one starts:
 //
 //  - view_ms: until the view had its cards: the last card to connect before
 //    a second without any (later ones are conditional cards flipping, not
-//    the view arriving), or before navigating to another view;
+//    the view arriving);
 //  - per live camera: when its first new frame was drawn, and which player
 //    drew it (HA starts WebRTC and HLS together and shows whichever wins);
 //  - stalls: animation frames over STALL_MS. Counted from frames rather than
@@ -136,6 +137,9 @@ function start(trigger, t0) {
     lastFrame: null,
   };
   report = r;
+  // location-changed fires before HA swaps the view, so the cameras connected
+  // now belong to the view being left; the new view's are new elements.
+  if (trigger === "navigate") for (const stream of cameras) r.hiddenCams.add(stream);
   // Videos already playing when a resume starts must show a *new* frame.
   for (const stream of cameras) {
     for (const [, el] of picturesOf(stream)) {
@@ -225,10 +229,27 @@ function finish() {
   }
 }
 
-// Another view: the report so far belongs to the one it started on.
-window.addEventListener("location-changed", () => {
-  if (report) report.viewSettled = true;
-});
+// Another view inside the app: end the report so far, which belongs to the
+// view it started on, and time the new one from here. HA fires
+// location-changed for its own navigation; popstate covers back and forward.
+// Both can fire for one move, so only an actual change of path counts.
+// HA's own redirects (/ to the default dashboard, a dashboard to its first
+// view) navigate with replace: those are the same open still arriving, so the
+// report carries on under the new path rather than ending empty.
+let currentPath = location.pathname;
+function viewChanged(ev) {
+  const path = location.pathname;
+  if (path === currentPath) return;
+  currentPath = path;
+  if (document.visibilityState !== "visible") return;
+  if (ev.type === "location-changed" && ev.detail?.replace && report) {
+    report.path = path.slice(0, 200);
+    return;
+  }
+  start("navigate", performance.now());
+}
+window.addEventListener("location-changed", viewChanged);
+window.addEventListener("popstate", viewChanged);
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
